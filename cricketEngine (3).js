@@ -65,7 +65,8 @@ export function rotatesStrike(ball) {
 }
 
 // Apply one committed ball to a cricket innings draft (mutates draft.a in place).
-// draft shape expected: { a: { runs, wickets, ballsBowled }, balls: [...currentOverBalls], overHistory: [...] , striker, nonStriker }
+// draft shape expected: { a: { runs, wickets, ballsBowled }, balls: [...currentOverBalls], overHistory: [...] , striker, nonStriker, bowler }
+// Returns { overJustCompleted: bool } so callers (UI) can react, e.g. show a toast.
 export function applyBall(draft, ball) {
   if (!draft.balls) draft.balls = [];
   if (!draft.overHistory) draft.overHistory = [];
@@ -94,6 +95,17 @@ export function applyBall(draft, ball) {
     draft.batterStats[draft.striker].balls += 1;
   }
 
+  // credit bowler figures: balls bowled (legal only), runs conceded (all runs off the bowler,
+  // i.e. everything except byes/leg-byes which aren't the bowler's fault), wickets taken
+  if (draft.bowler) {
+    if (!draft.bowlerStats) draft.bowlerStats = {};
+    if (!draft.bowlerStats[draft.bowler]) draft.bowlerStats[draft.bowler] = { balls: 0, runs: 0, wickets: 0 };
+    const concedesRuns = ball?.type === "bye" || ball?.type === "legbye" ? 0 : runs;
+    draft.bowlerStats[draft.bowler].runs += concedesRuns;
+    if (legal) draft.bowlerStats[draft.bowler].balls += 1;
+    if (ball === "W" || ball?.type === "wicket") draft.bowlerStats[draft.bowler].wickets += 1;
+  }
+
   draft.balls = [...draft.balls, ball];
 
   // rotate strike on odd runs run
@@ -105,9 +117,11 @@ export function applyBall(draft, ball) {
 
   // over completes after 6 LEGAL deliveries
   const legalCountThisOver = draft.balls.filter(isLegalDelivery).length;
+  let overJustCompleted = false;
   if (legalCountThisOver === 6) {
     draft.overHistory = [...draft.overHistory, draft.balls];
     draft.balls = [];
+    overJustCompleted = true;
     // rotate strike at end of over
     const tmp = draft.striker;
     draft.striker = draft.nonStriker;
@@ -126,6 +140,7 @@ export function applyBall(draft, ball) {
     draft.striker = null;
   }
 
+  draft._lastOverCompleted = overJustCompleted; // surfaced for UI toast, not real domain state
   return draft;
 }
 
@@ -167,6 +182,13 @@ export function undoLastBall(draft) {
     draft.batterStats[draft.striker].balls = Math.max(0, draft.batterStats[draft.striker].balls - 1);
   }
 
+  if (draft.bowler && draft.bowlerStats?.[draft.bowler]) {
+    const concedesRuns = last?.type === "bye" || last?.type === "legbye" ? 0 : runs;
+    draft.bowlerStats[draft.bowler].runs = Math.max(0, draft.bowlerStats[draft.bowler].runs - concedesRuns);
+    if (legal) draft.bowlerStats[draft.bowler].balls = Math.max(0, draft.bowlerStats[draft.bowler].balls - 1);
+    if (last === "W" || last?.type === "wicket") draft.bowlerStats[draft.bowler].wickets = Math.max(0, draft.bowlerStats[draft.bowler].wickets - 1);
+  }
+
   // undo strike rotation if that ball rotated it (best-effort re-swap)
   if (rotatesStrike(last) || pulledFromHistory) {
     const tmp = draft.striker;
@@ -184,4 +206,11 @@ export function undoLastBall(draft) {
 
 export function overRuns(over) {
   return over.reduce((sum, b) => sum + runsForBall(b), 0);
+}
+
+// Formats a legal-ball count as cricket overs notation, e.g. 14 balls -> "2.2"
+export function formatOvers(legalBalls) {
+  const overs = Math.floor((legalBalls || 0) / 6);
+  const balls = (legalBalls || 0) % 6;
+  return `${overs}.${balls}`;
 }
