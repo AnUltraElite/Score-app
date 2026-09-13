@@ -1,0 +1,187 @@
+// ============================================================
+// CRICKET SCORING ENGINE — pure logic, no UI
+// ============================================================
+// A "pending ball" flows through: choose outcome -> (optional bye/legbye + runs) -> confirm "Next ball"
+// Only on confirm does it get committed into balls/overHistory/runs/wickets/strike rotation.
+
+// Ball outcome shape once committed to history:
+//   number (0-6)          -> normal runs off the bat, legal delivery
+//   { type: "wide", runs } -> wide, illegal delivery, runs = 1 + any extra run byes on the wide (rare, default 1)
+//   { type: "noball", runs } -> no ball, illegal delivery, runs = 1 + runs scored off the bat
+//   { type: "bye", runs }   -> bye, legal delivery, runs = runs taken (min 1)
+//   { type: "legbye", runs } -> leg bye, legal delivery, runs = runs taken (min 1)
+//   "W" or { type: "wicket", runs } -> wicket. runs (if any, e.g. run out on a run) default 0
+
+export function displayBall(ball) {
+  if (ball === "W") return "W";
+  if (typeof ball === "number") return String(ball);
+  if (ball.type === "wicket") return "W";
+  if (ball.type === "wide") return `Wd${ball.runs > 1 ? "+" + (ball.runs - 1) : ""}`;
+  if (ball.type === "noball") return `Nb${ball.runs > 1 ? "+" + (ball.runs - 1) : ""}`;
+  if (ball.type === "bye") return `B${ball.runs}`;
+  if (ball.type === "legbye") return `LB${ball.runs}`;
+  return "?";
+}
+
+export function ballChipStyle(ball) {
+  const isWicket = ball === "W" || ball?.type === "wicket";
+  const isBoundary = ball === 4 || ball === 6;
+  const isExtra = ball?.type === "wide" || ball?.type === "noball";
+  const isByeType = ball?.type === "bye" || ball?.type === "legbye";
+  if (isWicket) return { bg: "rgba(255,70,85,0.14)", fg: "#FF6B78", bd: "rgba(255,70,85,0.4)" };
+  if (isBoundary) return { bg: "rgba(255,184,0,0.14)", fg: "#FFC933", bd: "rgba(255,184,0,0.4)" };
+  if (isExtra) return { bg: "rgba(78,197,255,0.12)", fg: "#4EC5FF", bd: "rgba(78,197,255,0.35)" };
+  if (isByeType) return { bg: "rgba(185,139,255,0.12)", fg: "#B98BFF", bd: "rgba(185,139,255,0.35)" };
+  return { bg: "rgba(255,255,255,0.06)", fg: "#fff", bd: "rgba(255,255,255,0.12)" };
+}
+
+// Is this delivery "legal" (counts toward the 6-ball over)?
+export function isLegalDelivery(ball) {
+  if (ball?.type === "wide" || ball?.type === "noball") return false;
+  return true; // runs, bye, legbye, wicket are all legal deliveries
+}
+
+// Total runs a ball outcome adds to the team score
+export function runsForBall(ball) {
+  if (ball === "W") return 0;
+  if (typeof ball === "number") return ball;
+  if (ball.type === "wicket") return ball.runs || 0;
+  return ball.runs || 0;
+}
+
+// Runs credited to the striker's individual score (byes/leg-byes/wides don't count; no-ball runs off the bat do)
+export function batterRuns(ball) {
+  if (typeof ball === "number") return ball;
+  if (ball?.type === "noball") return Math.max(0, (ball.runs || 1) - 1);
+  return 0;
+}
+
+// Does this ball rotate the strike (odd runs actually run between the wickets)?
+export function rotatesStrike(ball) {
+  if (typeof ball === "number") return ball % 2 === 1;
+  if (ball?.type === "bye" || ball?.type === "legbye") return (ball.runs || 0) % 2 === 1;
+  if (ball?.type === "noball") return Math.max(0, (ball.runs || 1) - 1) % 2 === 1;
+  return false; // wides don't run between wickets in our simplified model; wickets don't rotate
+}
+
+// Apply one committed ball to a cricket innings draft (mutates draft.a in place).
+// draft shape expected: { a: { runs, wickets, ballsBowled }, balls: [...currentOverBalls], overHistory: [...] , striker, nonStriker }
+export function applyBall(draft, ball) {
+  if (!draft.balls) draft.balls = [];
+  if (!draft.overHistory) draft.overHistory = [];
+
+  const legal = isLegalDelivery(ball);
+  const runs = runsForBall(ball);
+  const credited = batterRuns(ball);
+
+  draft.a.runs = (draft.a.runs || 0) + runs;
+  if (ball === "W" || ball?.type === "wicket") {
+    draft.a.wickets = (draft.a.wickets || 0) + 1;
+  }
+  if (legal) {
+    draft.a.ballsBowled = (draft.a.ballsBowled || 0) + 1;
+  }
+
+  // credit individual batter runs
+  if (credited > 0 && draft.striker) {
+    if (!draft.batterStats) draft.batterStats = {};
+    if (!draft.batterStats[draft.striker]) draft.batterStats[draft.striker] = { runs: 0, balls: 0 };
+    draft.batterStats[draft.striker].runs += credited;
+  }
+  if (legal && draft.striker) {
+    if (!draft.batterStats) draft.batterStats = {};
+    if (!draft.batterStats[draft.striker]) draft.batterStats[draft.striker] = { runs: 0, balls: 0 };
+    draft.batterStats[draft.striker].balls += 1;
+  }
+
+  draft.balls = [...draft.balls, ball];
+
+  // rotate strike on odd runs run
+  if (rotatesStrike(ball)) {
+    const tmp = draft.striker;
+    draft.striker = draft.nonStriker;
+    draft.nonStriker = tmp;
+  }
+
+  // over completes after 6 LEGAL deliveries
+  const legalCountThisOver = draft.balls.filter(isLegalDelivery).length;
+  if (legalCountThisOver === 6) {
+    draft.overHistory = [...draft.overHistory, draft.balls];
+    draft.balls = [];
+    // rotate strike at end of over
+    const tmp = draft.striker;
+    draft.striker = draft.nonStriker;
+    draft.nonStriker = tmp;
+  }
+
+  const overs = draft.overHistory.length;
+  const ballsInCurrentOver = draft.balls.filter(isLegalDelivery).length;
+  draft.a.overs = `${overs}.${ballsInCurrentOver}`;
+  draft.a.score = `${draft.a.runs}/${draft.a.wickets || 0}`;
+
+  // handle wicket: clear striker, prompt for new batter
+  if (ball === "W" || ball?.type === "wicket") {
+    if (!draft.dismissed) draft.dismissed = [];
+    if (draft.striker) draft.dismissed = [...draft.dismissed, draft.striker];
+    draft.striker = null;
+  }
+
+  return draft;
+}
+
+// Undo the last committed ball. Handles pulling back from a completed over.
+export function undoLastBall(draft) {
+  let balls = draft.balls || [];
+  let pulledFromHistory = false;
+
+  if (balls.length === 0 && (draft.overHistory || []).length > 0) {
+    balls = draft.overHistory[draft.overHistory.length - 1];
+    draft.overHistory = draft.overHistory.slice(0, -1);
+    pulledFromHistory = true;
+  }
+  if (balls.length === 0) return draft;
+
+  const last = balls[balls.length - 1];
+  draft.balls = balls.slice(0, -1);
+
+  const legal = isLegalDelivery(last);
+  const runs = runsForBall(last);
+  const credited = batterRuns(last);
+
+  draft.a.runs = Math.max(0, (draft.a.runs || 0) - runs);
+  if (last === "W" || last?.type === "wicket") {
+    draft.a.wickets = Math.max(0, (draft.a.wickets || 0) - 1);
+    // restore dismissed batter as striker (best-effort)
+    if (draft.dismissed && draft.dismissed.length > 0) {
+      const restored = draft.dismissed[draft.dismissed.length - 1];
+      draft.dismissed = draft.dismissed.slice(0, -1);
+      draft.striker = restored;
+    }
+  }
+  if (legal) draft.a.ballsBowled = Math.max(0, (draft.a.ballsBowled || 0) - 1);
+
+  if (credited > 0 && draft.striker && draft.batterStats?.[draft.striker]) {
+    draft.batterStats[draft.striker].runs = Math.max(0, draft.batterStats[draft.striker].runs - credited);
+  }
+  if (legal && draft.striker && draft.batterStats?.[draft.striker]) {
+    draft.batterStats[draft.striker].balls = Math.max(0, draft.batterStats[draft.striker].balls - 1);
+  }
+
+  // undo strike rotation if that ball rotated it (best-effort re-swap)
+  if (rotatesStrike(last) || pulledFromHistory) {
+    const tmp = draft.striker;
+    draft.striker = draft.nonStriker;
+    draft.nonStriker = tmp;
+  }
+
+  const overs = draft.overHistory.length;
+  const ballsInCurrentOver = draft.balls.filter(isLegalDelivery).length;
+  draft.a.overs = `${overs}.${ballsInCurrentOver}`;
+  draft.a.score = `${draft.a.runs}/${draft.a.wickets || 0}`;
+
+  return draft;
+}
+
+export function overRuns(over) {
+  return over.reduce((sum, b) => sum + runsForBall(b), 0);
+}
