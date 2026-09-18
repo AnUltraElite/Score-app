@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
 import {
   Home, Trophy, PlusCircle, User, Search, ChevronLeft, Lock, Globe,
   Flame, X, Users, Settings, Bell, Shield, Moon, Sun, ChevronRight,
@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import {
   displayBall, ballChipStyle, applyBall, undoLastBall, overRuns, isLegalDelivery, formatOvers,
-  checkInningsComplete, chaseStats, summarizeInnings, maxWicketsFor, computeMatchResult,
+  checkInningsComplete, summarizeInnings, computeMatchResult,
 } from "./lib/cricketEngine.js";
 import {
   loadSettings, saveSettings, loadProfile, saveProfile,
@@ -51,11 +51,10 @@ function buildSeedMatches() {
     },
     {
       id: "m2", sport: "cricket", status: "live", visibility: "public", ownerId: SYSTEM_OWNER,
-      a: { name: "Delta Strikers", short: "DEL", score: "142/1", overs: "16.2", runs: 142, wickets: 1, ballsBowled: 98 },
+      a: { name: "Delta Strikers", short: "DEL", score: "142/4", overs: "16.2", runs: 142, wickets: 4, ballsBowled: 98 },
       b: { name: "Coastal XI", short: "COA", score: "—", overs: "" },
       minute: null, detail: "Delta Strikers batting · 1st Innings",
       overLimit: 20,
-      innings: 1, inningsComplete: false, completionReason: null,
       overHistory: [[1, 4, 0, 1, 2, 0], [0, 0, 6, 1, 0, "W"], [4, 4, 1, 0, 0, 1]],
       balls: [1, 4, 0], batterStats: {}, bowlerStats: {},
       striker: "A. Kade", nonStriker: "V. Rana", bowler: "T. Okafor",
@@ -137,7 +136,7 @@ function Glass({ children, style, onClick, className, tint, theme }) {
         background: tint ? `linear-gradient(155deg, ${tint}14, ${theme.dark ? "rgba(255,255,255,0.03)" : "rgba(255,255,255,0.7)"} 60%)` : theme.glassBg,
         border: theme.glassBorder,
         boxShadow: theme.glassShadow,
-        backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+        backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
         borderRadius: 20, ...style,
       }}
     >
@@ -153,7 +152,7 @@ function LiquidGlassShell({ children, style, theme }) {
       background: theme.dark
         ? "linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.03) 40%, rgba(255,255,255,0.05))"
         : "linear-gradient(180deg, rgba(255,255,255,0.85), rgba(255,255,255,0.6) 40%, rgba(255,255,255,0.75))",
-      backdropFilter: "blur(28px) saturate(1.6)", WebkitBackdropFilter: "blur(28px) saturate(1.6)",
+      backdropFilter: "blur(16px) saturate(1.35)", WebkitBackdropFilter: "blur(16px) saturate(1.35)",
       boxShadow: theme.dark
         ? "inset 0 1px 0 rgba(255,255,255,0.14), inset 0 -1px 0 rgba(255,255,255,0.04), 0 -8px 32px -8px rgba(0,0,0,0.45)"
         : "inset 0 1px 0 rgba(255,255,255,0.9), 0 -8px 32px -8px rgba(18,24,31,0.12)",
@@ -245,9 +244,44 @@ function actionBtn(theme, accentColor) {
 // ============================================================
 // MATCH / UPCOMING CARDS
 // ============================================================
-function MatchCard({ m, onOpen, theme, isOwner }) {
+function getMatchResultText(m) {
+  if (m.resultText) return m.resultText;
+  if (m.matchResult) {
+    if (m.matchResult.winner === "tie") return "Match tied";
+    const winner = m.resultWinnerName || (m.matchResult.winner === "first"
+      ? m.firstInningsSummary?.teamName
+      : m.a?.name);
+    return winner ? `${winner} ${m.matchResult.summary}` : m.matchResult.summary;
+  }
+  if (m.status !== "final") return "";
+  const a = Number(m.a?.score);
+  const b = Number(m.b?.score);
+  if (Number.isFinite(a) && Number.isFinite(b)) {
+    if (a === b) return "Match tied";
+    return a > b ? `${m.a.name} won by ${a - b}` : `${m.b.name} won by ${b - a}`;
+  }
+  return m.detail || "Match ended";
+}
+
+function EndedPill({ small }) {
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center",
+      background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.14)",
+      color: "rgba(255,255,255,0.62)", borderRadius: 999,
+      padding: small ? "3px 8px" : "4px 10px", fontSize: small ? 10 : 11,
+      fontWeight: 700, letterSpacing: "0.04em",
+    }}>
+      ENDED
+    </span>
+  );
+}
+
+const MatchCard = memo(function MatchCard({ m, onOpen, theme, isOwner }) {
   const color = SPORT_COLOR[m.sport];
   const isLive = m.status === "live";
+  const isFinal = m.status === "final";
+  const resultText = isFinal ? getMatchResultText(m) : "";
   return (
     <Glass onClick={() => onOpen(m)} theme={theme} style={{ padding: 16, cursor: "pointer", position: "relative", overflow: "hidden", marginBottom: 12 }} className="match-card">
       <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: color, opacity: isLive ? 1 : 0.3 }} />
@@ -260,16 +294,20 @@ function MatchCard({ m, onOpen, theme, isOwner }) {
             <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, fontWeight: 700, color: "#4EC5FF", background: "rgba(78,197,255,0.12)", padding: "2px 6px", borderRadius: 999 }}><PenLine size={9} />YOURS</span>
           ) : null}
         </div>
-        {isLive ? <LivePill small /> : <span style={{ fontSize: 10.5, color: theme.textFaint, fontWeight: 600 }}>{m.status === "final" ? "FT" : "UPCOMING"}</span>}
+        {isLive ? <LivePill small /> : isFinal ? <EndedPill small /> : <span style={{ fontSize: 10.5, color: theme.textFaint, fontWeight: 600 }}>UPCOMING</span>}
       </div>
       <div style={{ flex: 1 }}>
         <Row team={m.a} highlight={isLive} theme={theme} />
         <Row team={m.b} highlight={isLive} theme={theme} />
       </div>
-      <div style={{ marginTop: 10, fontSize: 11.5, color: theme.textFaint }}>{m.detail}{m.minute ? ` · ${m.minute}'` : ""}</div>
+      {isFinal ? (
+        <div style={{ marginTop: 10, fontSize: 11.5, color: theme.text, fontWeight: 700 }}>{resultText}</div>
+      ) : (
+        <div style={{ marginTop: 10, fontSize: 11.5, color: theme.textFaint }}>{m.detail}{m.minute ? ` · ${m.minute}'` : ""}</div>
+      )}
     </Glass>
   );
-}
+});
 
 function Row({ team, highlight, theme }) {
   return (
@@ -285,7 +323,7 @@ function Row({ team, highlight, theme }) {
   );
 }
 
-function UpcomingCard({ m, onOpen, theme, isOwner }) {
+const UpcomingCard = memo(function UpcomingCard({ m, onOpen, theme, isOwner }) {
   const color = SPORT_COLOR[m.sport];
   return (
     <Glass onClick={() => onOpen(m)} tint={color} theme={theme} style={{ padding: 14, cursor: "pointer", marginBottom: 10 }} className="match-card">
@@ -304,7 +342,7 @@ function UpcomingCard({ m, onOpen, theme, isOwner }) {
       </div>
     </Glass>
   );
-}
+});
 
 // ============================================================
 // MATCH DETAIL ROUTER
@@ -348,10 +386,25 @@ function MatchDetail({ m, onBack, onUpdate, theme, isDesktop, isOwner, onToast }
 }
 
 // ---------- Generic (badminton / volleyball) ----------
+
+function finalizeNonCricketMatch(draft) {
+  draft.status = "final";
+  const a = Number(draft.a?.score);
+  const b = Number(draft.b?.score);
+  if (Number.isFinite(a) && Number.isFinite(b)) {
+    if (a === b) draft.resultText = "Match tied";
+    else draft.resultText = a > b ? `${draft.a.name} won by ${a - b}` : `${draft.b.name} won by ${b - a}`;
+  } else {
+    draft.resultText = "Match ended";
+  }
+  draft.detail = draft.resultText;
+  draft.endedAt = Date.now();
+}
+
 function GenericScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwner }) {
   const [showRoster, setShowRoster] = useState(false);
   const bump = (side, delta) => {
-    if (!isOwner) return;
+    if (!isOwner || m.status === "final") return;
     onUpdate(m.id, (draft) => { if (typeof draft[side].score === "number") draft[side].score = Math.max(0, draft[side].score + delta); });
   };
   return (
@@ -388,6 +441,8 @@ function GenericScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwn
           <Glass theme={theme} style={{ padding: 16 }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: theme.textDim, marginBottom: 4 }}>Scorer controls</div>
             <div style={{ fontSize: 12.5, color: theme.textFaint, lineHeight: 1.5 }}>Tap the + / − under each team to update live. Changes reflect instantly for every viewer{visibility === "private" ? " with the invite link." : "."}</div>
+            {m.status === "live" && <button onClick={() => onUpdate(m.id, finalizeNonCricketMatch)} className="press" style={{ width: "100%", marginTop: 12, padding: "11px 0", borderRadius: 12, border: theme.inputBorder, background: theme.inputBg, color: theme.text, fontWeight: 700, cursor: "pointer" }}>End match</button>}
+            {m.status === "final" && <div style={{ marginTop: 12, fontSize: 12.5, fontWeight: 700, color: theme.text }}>{getMatchResultText(m)}</div>}
           </Glass>
         )}
       </div>
@@ -419,13 +474,8 @@ function CricketScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwn
   const [showOvers, setShowOvers] = useState(false);
   const [showPlayers, setShowPlayers] = useState(false);
   const [showMatchSettings, setShowMatchSettings] = useState(false);
-  const [showFirstInnings, setShowFirstInnings] = useState(false);
   const [pickerRole, setPickerRole] = useState(null);
   const [pending, setPending] = useState(null);
-  // The completion popup is dismissible (per spec) but the resolve options
-  // must keep showing until the scorer actually resolves it — so dismissal
-  // only hides the modal, it doesn't clear draft.inningsComplete.
-  const [popupDismissed, setPopupDismissed] = useState(false);
 
   const currentOver = m.balls || [];
   const overHistory = m.overHistory || [];
@@ -436,17 +486,9 @@ function CricketScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwn
   const yetToBat = battingSquad.filter(p => !dismissed.includes(p) && !onStrikeNames.includes(p));
   const batterStats = m.batterStats || {};
   const bowlerStats = m.bowlerStats || {};
-  const innings = m.innings || 1;
-  const battingSquadSize = battingSquad.length;
-
-  // Reset the "dismissed" flag whenever a fresh completion state appears
-  // (e.g. a new wicket falls right at the limit after the previous
-  // completion was already resolved) so the popup can surface again.
-  useEffect(() => { setPopupDismissed(false); }, [m.inningsComplete, m.completionReason]);
 
   const selectOutcome = (kind, extra) => {
-    if (!isOwner || m.inningsComplete) return;
-    if (!m.striker || !m.nonStriker || !m.bowler) return; // both batters + bowler required before any ball
+    if (!isOwner) return;
     if (kind === "run") { setPending({ kind: "run", value: extra }); return; }
     if (kind === "wide" || kind === "noball") { setPending({ kind, runs: 1 }); return; }
     if (kind === "bye" || kind === "legbye") { setPending({ kind, runs: 1 }); return; }
@@ -460,93 +502,113 @@ function CricketScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwn
   const cancelPending = () => setPending(null);
 
   const confirmPending = () => {
-    if (!pending) return;
+    if (!pending || m.status === "final") return;
     let ball;
     if (pending.kind === "run") ball = pending.value;
     else if (pending.kind === "wicket") ball = "W";
     else ball = { type: pending.kind, runs: pending.runs || 1 };
 
     let overCompleted = false;
+    let inningsChanged = false;
+    let matchEnded = false;
+    let resultText = null;
+
     onUpdate(m.id, (draft) => {
       applyBall(draft, ball);
       overCompleted = !!draft._lastOverCompleted;
       delete draft._lastOverCompleted;
 
-      // After every ball, check whether the innings should now end.
-      const target = draft.innings === 2 ? draft.target : undefined;
-      const result = checkInningsComplete(draft, battingSquadSize, target);
-      if (result.complete && !draft.inningsComplete) {
-        draft.inningsComplete = true;
-        draft.completionReason = result.reason;
-      }
-    });
-    setPending(null);
-    if (overCompleted && onToast) onToast(`Over ${overHistory.length + 1} complete`, color);
-  };
+      const innings = draft.innings || 1;
+      const squadSize = Math.max(2, (draft.players?.a || []).filter(Boolean).length || 11);
+      const targetRuns = innings === 2 ? draft.firstInningsSummary?.runs : null;
+      const completion = checkInningsComplete({
+        innings,
+        runs: draft.a.runs || 0,
+        wickets: draft.a.wickets || 0,
+        ballsBowled: draft.a.ballsBowled || 0,
+        overLimit: draft.overLimit,
+        squadSize,
+        targetRuns,
+      });
 
-  const undoBall = () => {
-    if (!isOwner) return;
-    onUpdate(m.id, (draft) => {
-      undoLastBall(draft);
-      // Undoing can un-finish an innings (e.g. undoing the wicket that
-      // made it all out) — re-check and clear the flag if so.
-      const target = draft.innings === 2 ? draft.target : undefined;
-      const result = checkInningsComplete(draft, battingSquadSize, target);
-      if (!result.complete) {
+      if (!completion.complete) return;
+
+      draft.inningsComplete = true;
+      draft.completionReason = completion.reason;
+
+      if (innings === 1) {
+        const firstSummary = summarizeInnings({
+          teamName: draft.a.name,
+          team: draft.a,
+          overLimit: draft.overLimit,
+        });
+        draft.firstInningsSummary = firstSummary;
+        draft.inningsHistory = [...(draft.inningsHistory || []), {
+          ...firstSummary,
+          overHistory: [...(draft.overHistory || [])],
+          balls: [...(draft.balls || [])],
+        }];
+
+        const firstTeam = draft.a;
+        const secondTeam = draft.b;
+        const firstPlayers = draft.players?.a || [];
+        const secondPlayers = draft.players?.b || [];
+        const firstCaptain = draft.captains?.a || null;
+        const secondCaptain = draft.captains?.b || null;
+
+        draft.a = { ...secondTeam, score: "0/0", runs: 0, wickets: 0, ballsBowled: 0, overs: "0.0" };
+        draft.b = { ...firstTeam, score: firstSummary.score };
+        draft.players = { a: secondPlayers, b: firstPlayers };
+        draft.captains = { a: secondCaptain, b: firstCaptain };
+        draft.dismissed = [];
+        draft.balls = [];
+        draft.overHistory = [];
+        draft.batterStats = {};
+        draft.bowlerStats = {};
+        draft.striker = secondPlayers[0] || null;
+        draft.nonStriker = secondPlayers[1] || null;
+        draft.bowler = firstPlayers[0] || null;
+        draft.innings = 2;
         draft.inningsComplete = false;
         draft.completionReason = null;
+        draft.detail = `${draft.a.name} batting · 2nd Innings`;
+        draft.status = "live";
+        inningsChanged = true;
+        return;
       }
+
+      const finalResult = computeMatchResult({
+        firstInnings: draft.firstInningsSummary,
+        secondInningsTeam: draft.a,
+        secondSquadSize: squadSize,
+        overLimit: draft.overLimit,
+      });
+      const winnerName = finalResult.winner === "first"
+        ? draft.firstInningsSummary?.teamName
+        : finalResult.winner === "second" ? draft.a.name : null;
+      draft.status = "final";
+      draft.matchResult = finalResult;
+      draft.resultWinnerName = winnerName || null;
+      draft.resultText = finalResult.winner === "tie"
+        ? "Match tied"
+        : `${winnerName} ${finalResult.summary}`;
+      draft.detail = draft.resultText;
+      draft.endedAt = Date.now();
+      draft.inningsComplete = true;
+      matchEnded = true;
+      resultText = draft.resultText;
     });
-    setPopupDismissed(false);
+
+    setPending(null);
+    if (matchEnded) onToast?.(resultText, color);
+    else if (inningsChanged) onToast?.("1st innings complete · 2nd innings started", color);
+    else if (overCompleted) onToast?.(`Over ${overHistory.length + 1} complete`, color);
   };
 
+  const undoBall = () => { if (isOwner) onUpdate(m.id, (draft) => { undoLastBall(draft); }); };
   const setPlayer = (role, name) => { onUpdate(m.id, (draft) => { draft[role] = name; }); setPickerRole(null); };
   const swapStrike = () => { onUpdate(m.id, (draft) => { const t = draft.striker; draft.striker = draft.nonStriker; draft.nonStriker = t; }); };
-  const setOverLimit = (n) => {
-    onUpdate(m.id, (draft) => {
-      draft.overLimit = n;
-      // Raising the limit can un-finish an "overs" completion — re-check.
-      const target = draft.innings === 2 ? draft.target : undefined;
-      const result = checkInningsComplete(draft, battingSquadSize, target);
-      if (!result.complete) {
-        draft.inningsComplete = false;
-        draft.completionReason = null;
-      }
-    });
-    setPopupDismissed(false);
-  };
-
-  const startNextInnings = () => {
-    onUpdate(m.id, (draft) => {
-      const firstInnings = summarizeInnings(draft, draft.a.name, draft.b.name);
-      const target = (draft.a.runs || 0) + 1;
-
-      // swap batting/bowling sides: b now bats, a now bowls
-      const newBattingSide = { ...draft.b, score: "0/0", runs: 0, wickets: 0, ballsBowled: 0, overs: "0.0" };
-      const newBowlingSide = { ...draft.a };
-      draft.a = newBattingSide;
-      draft.b = newBowlingSide;
-
-      const tmpPlayers = draft.players.a; draft.players.a = draft.players.b; draft.players.b = tmpPlayers;
-      const tmpCaptains = draft.captains.a; draft.captains.a = draft.captains.b; draft.captains.b = tmpCaptains;
-
-      draft.innings = 2;
-      draft.target = target;
-      draft.firstInningsSummary = firstInnings;
-      draft.balls = [];
-      draft.overHistory = [];
-      draft.batterStats = {};
-      draft.bowlerStats = {};
-      draft.dismissed = [];
-      draft.striker = null;
-      draft.nonStriker = null;
-      draft.bowler = null;
-      draft.inningsComplete = false;
-      draft.completionReason = null;
-      draft.detail = `${draft.a.name} need ${target} to win`;
-    });
-    setPopupDismissed(false);
-  };
+  const setOverLimit = (n) => { onUpdate(m.id, (draft) => { draft.overLimit = n; }); };
 
   const pendingLabel = () => {
     if (!pending) return null;
@@ -561,46 +623,21 @@ function CricketScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwn
 
   const showRunAdjust = pending && (pending.kind === "bye" || pending.kind === "legbye" || pending.kind === "wide" || pending.kind === "noball");
   const oversUsed = formatOvers(m.a.ballsBowled || 0);
-  const needsOpeners = !m.striker || !m.nonStriker;
-  const needsBowler = !m.bowler;
-  const scoringLocked = m.inningsComplete || needsOpeners || needsBowler;
-
-  const chase = innings === 2 && m.target
-    ? chaseStats({ target: m.target, runsScored: m.a.runs || 0, ballsBowled: m.a.ballsBowled || 0, totalBalls: (m.overLimit || 0) * 6 })
-    : null;
-
-  // Match is fully over once the 2nd innings itself has completed.
-  const matchOver = innings === 2 && m.inningsComplete;
-  const matchResult = matchOver
-    ? computeMatchResult({
-        firstInnings: m.firstInningsSummary,
-        secondInningsTeam: m.a,
-        secondSquadSize: battingSquadSize,
-        overLimit: m.overLimit,
-      })
-    : null;
+  const overLimitReached = m.overLimit && (m.a.ballsBowled || 0) >= m.overLimit * 6;
 
   const scoringPad = (
     <>
       <Glass theme={theme} style={{ padding: 12, marginBottom: 10 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <PlayerSlot label="STRIKER" value={m.striker} onClick={() => isOwner && setPickerRole("striker")} accent={color} highlight theme={theme} disabled={!isOwner} required={!m.striker} />
+          <PlayerSlot label="STRIKER" value={m.striker} onClick={() => isOwner && setPickerRole("striker")} accent={color} highlight theme={theme} disabled={!isOwner} />
           {isOwner && (
             <button onClick={swapStrike} className="press" title="Swap strike" style={{ width: 30, height: 30, borderRadius: 9, border: theme.inputBorder, background: theme.inputBg, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
               <ArrowLeftRight size={13} color={theme.textDim} />
             </button>
           )}
-          <PlayerSlot label="NON-STRIKER" value={m.nonStriker} onClick={() => isOwner && setPickerRole("nonStriker")} accent={color} theme={theme} disabled={!isOwner} required={!m.nonStriker} />
-          <PlayerSlot label="BOWLER" value={m.bowler} onClick={() => isOwner && setPickerRole("bowler")} accent="#4EC5FF" theme={theme} disabled={!isOwner} required={!m.bowler} />
+          <PlayerSlot label="NON-STRIKER" value={m.nonStriker} onClick={() => isOwner && setPickerRole("nonStriker")} accent={color} theme={theme} disabled={!isOwner} />
+          <PlayerSlot label="BOWLER" value={m.bowler} onClick={() => isOwner && setPickerRole("bowler")} accent="#4EC5FF" theme={theme} disabled={!isOwner} />
         </div>
-        {isOwner && (needsOpeners || needsBowler) && (
-          <div style={{ marginTop: 8, fontSize: 11, color: "#FFC933", fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}>
-            <AlertCircle size={12} />
-            {needsOpeners && needsBowler ? "Select striker, non-striker and bowler before scoring"
-              : needsOpeners ? "Select both striker and non-striker before scoring"
-              : "Select a bowler before scoring"}
-          </div>
-        )}
       </Glass>
 
       <Glass theme={theme} style={{ padding: "10px 12px", marginBottom: 10 }}>
@@ -611,7 +648,7 @@ function CricketScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwn
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", minHeight: 26 }}>
           {currentOver.length === 0 && <span style={{ fontSize: 11.5, color: theme.textFaint }}>New over</span>}
           {currentOver.map((b, i) => {
-            const c = ballChipStyle(b, theme);
+            const c = ballChipStyle(b);
             return <div key={i} style={{ minWidth: 26, height: 26, padding: "0 4px", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", background: c.bg, color: c.fg, border: `1px solid ${c.bd}`, fontSize: 10.5, fontWeight: 700, fontFamily: "Space Grotesk" }}>{displayBall(b)}</div>;
           })}
         </div>
@@ -640,8 +677,8 @@ function CricketScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwn
         </Glass>
       )}
 
-      {isOwner && (
-        <Glass theme={theme} style={{ padding: 12, opacity: scoringLocked ? 0.4 : 1, pointerEvents: scoringLocked ? "none" : "auto" }}>
+      {isOwner && m.status === "live" && (
+        <Glass theme={theme} style={{ padding: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, marginBottom: 6 }}>
             {[0, 1, 2, 3].map(n => <button key={n} onClick={() => selectOutcome("run", n)} className="press" style={actionBtn(theme)}>{n}</button>)}
           </div>
@@ -660,19 +697,6 @@ function CricketScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwn
           </div>
         </Glass>
       )}
-
-      {isOwner && m.inningsComplete && !matchOver && popupDismissed && (
-        <InningsCompleteBanner
-          reason={m.completionReason}
-          onResume={() => setPopupDismissed(false)}
-          onNextInnings={innings === 1 ? startNextInnings : null}
-          onIncreaseOvers={m.completionReason === "overs" ? () => setShowMatchSettings(true) : null}
-          onUndo={undoBall}
-          theme={theme}
-          color={color}
-          isFinalInnings={innings === 2}
-        />
-      )}
     </>
   );
 
@@ -689,27 +713,6 @@ function CricketScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwn
               {isOwner && <button onClick={() => setShowMatchSettings(true)} className="press" style={{ ...ghostBtn(theme), padding: "5px 9px" }}><Sliders size={12} /></button>}
             </div>
           </div>
-
-          {innings === 2 && m.firstInningsSummary && (
-            <button
-              onClick={() => setShowFirstInnings(true)}
-              className="press"
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
-                gap: 6, marginBottom: 10, fontSize: 11, color: theme.textFaint, position: "relative",
-                background: theme.inputBg, border: theme.inputBorder, borderRadius: 10, padding: "8px 10px", cursor: "pointer",
-              }}
-            >
-              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontWeight: 700, color: theme.textDim }}>{m.firstInningsSummary.teamName}</span>
-                <span>{m.firstInningsSummary.runs}/{m.firstInningsSummary.wickets} ({m.firstInningsSummary.overs} ov)</span>
-              </span>
-              <span style={{ display: "flex", alignItems: "center", gap: 3, color: color, fontWeight: 600 }}>
-                <Eye size={11} /> View innings
-              </span>
-            </button>
-          )}
-
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", position: "relative" }}>
             <div>
               <div style={{ fontSize: 12, color: theme.textDim, fontWeight: 600, marginBottom: 2 }}>{m.a.name}</div>
@@ -723,17 +726,13 @@ function CricketScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwn
               <div style={{ fontSize: 10.5, color: theme.textFaint, marginTop: 2 }}>vs {m.b.name}</div>
             </div>
           </div>
-
-          {chase && !m.inningsComplete && (
-            <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${theme.hairline}`, position: "relative" }}>
-              <div style={{ fontSize: 12.5, fontWeight: 700, color: color, marginBottom: 6 }}>
-                Need {chase.runsNeeded} run{chase.runsNeeded === 1 ? "" : "s"} off {chase.ballsRemaining} ball{chase.ballsRemaining === 1 ? "" : "s"}
-              </div>
-              <div style={{ display: "flex", gap: 16, fontSize: 10.5, color: theme.textFaint }}>
-                <span>CRR <b style={{ color: theme.textDim }}>{chase.currentRunRate}</b></span>
-                <span>RRR <b style={{ color: theme.textDim }}>{chase.requiredRunRate}</b></span>
-              </div>
+          {m.status === "final" && (
+            <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 12, background: theme.inputBg, border: theme.inputBorder, color: theme.text, fontSize: 12.5, fontWeight: 700, position: "relative" }}>
+              {getMatchResultText(m)}
             </div>
+          )}
+          {overLimitReached && m.status !== "final" && (
+            <div style={{ marginTop: 10, fontSize: 11.5, color: "#FFC933", fontWeight: 600, position: "relative" }}>Overs limit reached</div>
           )}
         </Glass>
         {!isDesktop && scoringPad}
@@ -745,7 +744,6 @@ function CricketScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwn
           role={pickerRole}
           squad={pickerRole === "bowler" ? bowlingSquad : battingSquad}
           dismissed={pickerRole === "bowler" ? [] : dismissed}
-          excludeSelected={pickerRole === "nonStriker" ? m.striker : pickerRole === "striker" ? m.nonStriker : null}
           current={m[pickerRole]}
           onPick={(name) => setPlayer(pickerRole, name)}
           onClose={() => setPickerRole(null)}
@@ -759,252 +757,9 @@ function CricketScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwn
       {showMatchSettings && (
         <CricketMatchSettings overLimit={m.overLimit} onSave={setOverLimit} onClose={() => setShowMatchSettings(false)} theme={theme} color={color} />
       )}
-      {showFirstInnings && m.firstInningsSummary && (
-        <InningsScorecardPanel innings={m.firstInningsSummary} onClose={() => setShowFirstInnings(false)} theme={theme} color={color} title="1st Innings" />
-      )}
-
-      {isOwner && m.inningsComplete && !matchOver && !popupDismissed && (
-        <InningsCompletePopup
-          reason={m.completionReason}
-          battingTeam={m.a.name}
-          score={`${m.a.runs || 0}/${m.a.wickets || 0}`}
-          overs={m.a.overs}
-          isFinalInnings={innings === 2}
-          won={innings === 2 && m.completionReason === "target"}
-          onDismiss={() => setPopupDismissed(true)}
-          onNextInnings={innings === 1 ? startNextInnings : null}
-          onIncreaseOvers={m.completionReason === "overs" ? () => setShowMatchSettings(true) : null}
-          onUndo={undoBall}
-          theme={theme}
-          color={color}
-        />
-      )}
-
-      {matchOver && matchResult && (
-        <MatchResultScreen
-          m={m}
-          result={matchResult}
-          theme={theme}
-          color={color}
-        />
-      )}
     </div>
   );
 }
-
-// ---------- Innings completion popup ----------
-// Wording per reason, in plain, unambiguous English:
-//   overs  -> "Overs finished" + Start next innings / Increase over limit
-//   wickets-> "All out" (or "N wickets down" framed as all out w/ no-last-man rule) + Start next innings / Undo previous ball
-//   target -> "Target reached" (2nd innings only, match over — no further options needed)
-function InningsCompletePopup({ reason, battingTeam, score, overs, isFinalInnings, won, onDismiss, onNextInnings, onIncreaseOvers, onUndo, theme, color }) {
-  const title = reason === "target" ? "Target reached" : reason === "overs" ? "Overs finished" : "All out";
-  const subtitle = reason === "target"
-    ? `${battingTeam} won the match — ${score} (${overs} overs)`
-    : `${battingTeam} finished on ${score} (${overs} overs)`;
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(6,8,10,0.75)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 140, padding: 20 }}>
-      <Glass theme={theme} tint={color} style={{ padding: 26, maxWidth: 380, width: "100%", border: `1.5px solid ${color}55`, position: "relative" }}>
-        <button onClick={onDismiss} className="press" style={{ position: "absolute", top: 14, right: 14, background: "none", border: "none", cursor: "pointer" }}>
-          <X size={17} color={theme.textFaint} />
-        </button>
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
-          <div style={{ width: 52, height: 52, borderRadius: 16, background: `${color}20`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Trophy size={24} color={color} />
-          </div>
-        </div>
-        <h2 style={{ fontFamily: "Space Grotesk", fontSize: 20, fontWeight: 700, color: theme.text, margin: "0 0 6px", textAlign: "center" }}>{title}</h2>
-        <p style={{ fontSize: 13, color: theme.textDim, textAlign: "center", margin: "0 0 22px", lineHeight: 1.5 }}>{subtitle}</p>
-
-        {isFinalInnings ? (
-          <div style={{ fontSize: 12.5, color: theme.textFaint, textAlign: "center" }}>The match is complete.</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {onNextInnings && (
-              <button onClick={onNextInnings} className="press" style={{ width: "100%", padding: "13px 0", borderRadius: 14, border: "none", background: color, color: "#0A0E12", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
-                Start next innings
-              </button>
-            )}
-            {onIncreaseOvers && (
-              <button onClick={onIncreaseOvers} className="press" style={{ width: "100%", padding: "13px 0", borderRadius: 14, border: theme.inputBorder, background: theme.inputBg, color: theme.text, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
-                Increase over limit
-              </button>
-            )}
-            {onUndo && (
-              <button onClick={() => { onUndo(); onDismiss(); }} className="press" style={{ width: "100%", padding: "13px 0", borderRadius: 14, border: theme.inputBorder, background: theme.inputBg, color: theme.textDim, fontWeight: 600, fontSize: 13.5, cursor: "pointer" }}>
-                Undo previous ball
-              </button>
-            )}
-          </div>
-        )}
-      </Glass>
-    </div>
-  );
-}
-
-// Persistent, dismissible banner shown after the popup is closed but the
-// innings is still unresolved — keeps the resolve options reachable without
-// blocking the view of the current score.
-function InningsCompleteBanner({ reason, onResume, onNextInnings, onIncreaseOvers, onUndo, theme, color, isFinalInnings }) {
-  const label = reason === "target" ? "Target reached" : reason === "overs" ? "Overs finished" : "All out";
-  return (
-    <Glass theme={theme} tint={color} style={{ padding: 12, marginTop: 10, border: `1px solid ${color}45` }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: isFinalInnings ? 0 : 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <AlertCircle size={14} color={color} />
-          <span style={{ fontSize: 12.5, fontWeight: 700, color: theme.text }}>{label}</span>
-        </div>
-        <button onClick={onResume} className="press" style={{ ...ghostBtn(theme), padding: "4px 9px", fontSize: 11 }}>View</button>
-      </div>
-      {!isFinalInnings && (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {onNextInnings && <button onClick={onNextInnings} className="press" style={{ padding: "8px 14px", borderRadius: 10, border: "none", background: color, color: "#0A0E12", fontWeight: 700, fontSize: 12, cursor: "pointer" }}>Start next innings</button>}
-          {onIncreaseOvers && <button onClick={onIncreaseOvers} className="press" style={{ padding: "8px 14px", borderRadius: 10, border: theme.inputBorder, background: theme.inputBg, color: theme.text, fontWeight: 600, fontSize: 12, cursor: "pointer" }}>Increase over limit</button>}
-          {onUndo && <button onClick={onUndo} className="press" style={{ padding: "8px 14px", borderRadius: 10, border: theme.inputBorder, background: theme.inputBg, color: theme.textDim, fontWeight: 600, fontSize: 12, cursor: "pointer" }}>Undo previous ball</button>}
-        </div>
-      )}
-    </Glass>
-  );
-}
-
-// ---------- Full scorecard for one innings (batting + bowling figures) ----------
-// Used both for "view previous innings" mid-match and for both scorecards
-// on the final result screen.
-function InningsScorecardPanel({ innings, onClose, theme, color, title }) {
-  const battingOrder = innings.battingOrder || [];
-  const bowlingOrder = innings.bowlingOrder || [];
-  const dismissed = innings.dismissed || [];
-  const batterStats = innings.batterStats || {};
-  const bowlerStats = innings.bowlerStats || {};
-  // Batters who never got a batterStats entry and were never dismissed
-  // simply didn't come to the crease — shown as "did not bat".
-  const didNotBat = battingOrder.filter(p => !batterStats[p] && !dismissed.includes(p));
-  const batted = battingOrder.filter(p => batterStats[p] || dismissed.includes(p));
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: theme.bg, zIndex: 150, overflowY: "auto", animation: "fadeIn 0.2s ease" }}>
-      <div style={{ position: "sticky", top: 0, background: theme.dark ? "rgba(10,14,18,0.92)" : "rgba(244,246,248,0.92)", backdropFilter: "blur(20px)", borderBottom: `1px solid ${theme.hairline}`, padding: "16px 18px", display: "flex", alignItems: "center", gap: 12, zIndex: 5 }}>
-        <button onClick={onClose} className="press" style={ghostBtn(theme)}><ChevronLeft size={18} /><span style={{ fontSize: 14 }}>Back</span></button>
-        <h2 style={{ fontFamily: "Space Grotesk", fontSize: 18, fontWeight: 700, margin: 0, color: theme.text }}>{title || innings.teamName}</h2>
-      </div>
-      <div style={{ padding: 18, maxWidth: 640, margin: "0 auto" }}>
-        <Glass theme={theme} tint={color} style={{ padding: 16, marginBottom: 18 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: theme.textDim, marginBottom: 4 }}>{innings.teamName}</div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-            <span style={{ fontFamily: "Space Grotesk", fontSize: 30, fontWeight: 700, color: theme.text }}>{innings.runs}/{innings.wickets}</span>
-            <span style={{ fontSize: 13, color: theme.textFaint }}>({innings.overs}{innings.overLimit ? ` / ${innings.overLimit}` : ""} ov)</span>
-          </div>
-        </Glass>
-
-        <div style={{ fontSize: 11, fontWeight: 700, color: theme.textDim, marginBottom: 8, letterSpacing: "0.03em" }}>BATTING</div>
-        <Glass theme={theme} style={{ padding: 4, marginBottom: 18, overflow: "hidden" }}>
-          {batted.map(p => {
-            const stats = batterStats[p] || { runs: 0, balls: 0 };
-            const isOut = dismissed.includes(p);
-            return (
-              <div key={p} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px", borderBottom: `1px solid ${theme.hairline}` }}>
-                <span style={{ fontSize: 14, color: isOut ? theme.textDim : theme.text, fontWeight: isOut ? 400 : 600, flex: 1 }}>{p}</span>
-                <span style={{ fontSize: 10.5, color: isOut ? "#FF6B78" : "#3DDC97", fontWeight: 700, marginRight: 8 }}>{isOut ? "OUT" : "NOT OUT"}</span>
-                <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "Space Grotesk", color: theme.text }}>{stats.runs}<span style={{ fontSize: 10.5, color: theme.textFaint, fontWeight: 500 }}> ({stats.balls})</span></span>
-              </div>
-            );
-          })}
-          {batted.length === 0 && <div style={{ padding: 14, fontSize: 12.5, color: theme.textFaint }}>No batting data</div>}
-        </Glass>
-
-        {didNotBat.length > 0 && (
-          <div style={{ fontSize: 11.5, color: theme.textFaint, marginBottom: 18 }}>
-            Did not bat: {didNotBat.join(", ")}
-          </div>
-        )}
-
-        <div style={{ fontSize: 11, fontWeight: 700, color: theme.textDim, marginBottom: 8, letterSpacing: "0.03em" }}>BOWLING</div>
-        <Glass theme={theme} style={{ padding: 4, overflow: "hidden" }}>
-          {bowlingOrder.filter(p => bowlerStats[p]).map(p => {
-            const stats = bowlerStats[p];
-            return (
-              <div key={p} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px", borderBottom: `1px solid ${theme.hairline}` }}>
-                <span style={{ fontSize: 14, color: theme.text, fontWeight: 600, flex: 1 }}>{p}</span>
-                <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "Space Grotesk", color: theme.text }}>{formatOvers(stats.balls)}-{stats.runs}-{stats.wickets}</span>
-              </div>
-            );
-          })}
-          {bowlingOrder.filter(p => bowlerStats[p]).length === 0 && <div style={{ padding: 14, fontSize: 12.5, color: theme.textFaint }}>No bowling data</div>}
-        </Glass>
-      </div>
-    </div>
-  );
-}
-
-// ---------- Final match-result screen ----------
-// Shows the win-margin sentence in standard cricket phrasing, both team
-// scores, and lets the scorer drill into either team's full scorecard.
-function MatchResultScreen({ m, result, theme, color }) {
-  const [viewingInnings, setViewingInnings] = useState(null); // 'first' | 'second' | null
-
-  const firstInnings = m.firstInningsSummary;
-  const secondInnings = summarizeInnings(m, m.a.name, m.b.name);
-  // second innings didn't freeze players/dismissed under the same keys as
-  // the live match draft — summarizeInnings reads straight off `m` since
-  // the 2nd innings IS the live draft at this point.
-
-  const winnerName = result.winner === "first" ? firstInnings.teamName : result.winner === "second" ? secondInnings.teamName : null;
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: theme.bg, zIndex: 160, overflowY: "auto", animation: "fadeIn 0.25s ease" }}>
-      <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", alignItems: "center", padding: "48px 20px" }}>
-        <div style={{ width: 64, height: 64, borderRadius: 20, background: `${color}20`, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 18 }}>
-          <Trophy size={30} color={color} />
-        </div>
-
-        {result.winner === "tie" ? (
-          <h1 style={{ fontFamily: "Space Grotesk", fontSize: 24, fontWeight: 700, color: theme.text, margin: "0 0 8px", textAlign: "center" }}>Match tied</h1>
-        ) : (
-          <>
-            <div style={{ fontSize: 12, fontWeight: 700, color: theme.textFaint, letterSpacing: "0.04em", marginBottom: 6 }}>MATCH COMPLETE</div>
-            <h1 style={{ fontFamily: "Space Grotesk", fontSize: 24, fontWeight: 700, color: theme.text, margin: "0 0 8px", textAlign: "center" }}>{winnerName} won</h1>
-            <p style={{ fontSize: 15, fontWeight: 600, color: color, margin: "0 0 32px", textAlign: "center" }}>{result.summary}</p>
-          </>
-        )}
-
-        <div style={{ width: "100%", maxWidth: 420, display: "flex", flexDirection: "column", gap: 10 }}>
-          <button onClick={() => setViewingInnings("first")} className="press" style={{ width: "100%", textAlign: "left", cursor: "pointer" }}>
-            <Glass theme={theme} style={{ padding: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: theme.textDim, marginBottom: 4 }}>{firstInnings.teamName} · 1st innings</div>
-                  <div style={{ fontFamily: "Space Grotesk", fontSize: 20, fontWeight: 700, color: theme.text }}>{firstInnings.runs}/{firstInnings.wickets} <span style={{ fontSize: 12, color: theme.textFaint, fontWeight: 500 }}>({firstInnings.overs} ov)</span></div>
-                </div>
-                <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color, fontWeight: 600 }}><Eye size={12} /> Scorecard</span>
-              </div>
-            </Glass>
-          </button>
-
-          <button onClick={() => setViewingInnings("second")} className="press" style={{ width: "100%", textAlign: "left", cursor: "pointer" }}>
-            <Glass theme={theme} style={{ padding: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: theme.textDim, marginBottom: 4 }}>{secondInnings.teamName} · 2nd innings</div>
-                  <div style={{ fontFamily: "Space Grotesk", fontSize: 20, fontWeight: 700, color: theme.text }}>{secondInnings.runs}/{secondInnings.wickets} <span style={{ fontSize: 12, color: theme.textFaint, fontWeight: 500 }}>({secondInnings.overs} ov)</span></div>
-                </div>
-                <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color, fontWeight: 600 }}><Eye size={12} /> Scorecard</span>
-              </div>
-            </Glass>
-          </button>
-        </div>
-      </div>
-
-      {viewingInnings === "first" && (
-        <InningsScorecardPanel innings={firstInnings} onClose={() => setViewingInnings(null)} theme={theme} color={color} title="1st Innings" />
-      )}
-      {viewingInnings === "second" && (
-        <InningsScorecardPanel innings={secondInnings} onClose={() => setViewingInnings(null)} theme={theme} color={color} title="2nd Innings" />
-      )}
-    </div>
-  );
-}
-
 
 function CricketMatchSettings({ overLimit, onSave, onClose, theme, color }) {
   const [val, setVal] = useState(overLimit || 20);
@@ -1025,29 +780,26 @@ function CricketMatchSettings({ overLimit, onSave, onClose, theme, color }) {
   );
 }
 
-function PlayerSlot({ label, value, onClick, accent, highlight, theme, disabled, required }) {
-  const needsAttention = required && !disabled;
+function PlayerSlot({ label, value, onClick, accent, highlight, theme, disabled }) {
   return (
     <button onClick={onClick} disabled={disabled} className="press" style={{
       flex: 1, padding: "8px 6px", borderRadius: 12, cursor: disabled ? "default" : "pointer", textAlign: "center",
-      border: `1px solid ${needsAttention ? "rgba(255,184,0,0.5)" : highlight && value ? accent + "50" : theme.inputBorder}`,
-      background: needsAttention ? "rgba(255,184,0,0.1)" : highlight && value ? accent + "12" : theme.inputBg,
+      border: `1px solid ${highlight && value ? accent + "50" : theme.inputBorder}`,
+      background: highlight && value ? accent + "12" : theme.inputBg,
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 3, fontSize: 8.5, fontWeight: 700, color: theme.textFaint, letterSpacing: "0.03em", marginBottom: 3 }}>
         {highlight && <span style={{ fontSize: 9 }}>🏏</span>}{label}
       </div>
-      <div style={{ fontSize: 12, fontWeight: 600, color: value ? theme.text : needsAttention ? "#FFC933" : theme.textFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: value ? theme.text : theme.textFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {value || "Select"}
       </div>
     </button>
   );
 }
 
-function PlayerPicker({ role, squad, dismissed, current, excludeSelected, onPick, onClose, theme }) {
+function PlayerPicker({ role, squad, dismissed, current, onPick, onClose, theme }) {
   const label = role === "striker" ? "Select striker" : role === "nonStriker" ? "Select non-striker" : "Select bowler";
-  // A player already batting at the other end can't also be picked here —
-  // two roles, one person on the field at a time.
-  const available = squad.filter(p => !dismissed.includes(p) && p !== excludeSelected);
+  const available = squad.filter(p => !dismissed.includes(p));
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(6,8,10,0.7)", backdropFilter: "blur(6px)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 110 }} onClick={onClose}>
       <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 480, background: theme.surface, borderTop: theme.inputBorder, borderRadius: "24px 24px 0 0", padding: "10px 20px 28px", maxHeight: "70vh", overflowY: "auto" }}>
@@ -1094,7 +846,7 @@ function OversPanel({ overHistory, currentOver, onClose, color, theme }) {
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {over.map((b, i) => {
-                  const c = ballChipStyle(b, theme);
+                  const c = ballChipStyle(b);
                   return <div key={i} style={{ minWidth: 30, height: 30, padding: "0 5px", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", background: c.bg, color: c.fg, border: `1px solid ${c.bd}`, fontSize: 11, fontWeight: 700, fontFamily: "Space Grotesk" }}>{displayBall(b)}</div>;
                 })}
               </div>
@@ -1173,7 +925,7 @@ function SoccerScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwne
   const events = m.events || [];
 
   const addEvent = (side, type) => {
-    if (!isOwner) return;
+    if (!isOwner || m.status === "final") return;
     onUpdate(m.id, (draft) => {
       draft.events = [...(draft.events || []), { min: draft.minute || 0, type, team: side, player: "—" }];
       if (type === "goal") draft[side].score = (draft[side].score || 0) + 1;
@@ -1254,7 +1006,9 @@ function SoccerScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwne
           </Glass>
         )}
 
-        {isDesktop && (
+                 {isOwner && m.status === "live" && <button onClick={() => onUpdate(m.id, finalizeNonCricketMatch)} className="press" style={{ width: "100%", marginBottom: 14, padding: "11px 0", borderRadius: 12, border: theme.inputBorder, background: theme.inputBg, color: theme.text, fontWeight: 700, cursor: "pointer" }}>End match</button>}
+         {m.status === "final" && <div style={{ margin: "-2px 0 14px", fontSize: 12.5, color: theme.text, fontWeight: 700 }}>{getMatchResultText(m)}</div>}
+{isDesktop && (
           <Glass theme={theme} style={{ padding: 16, marginBottom: 14 }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: theme.textDim, marginBottom: 10 }}>Timeline</div>
             {events.length === 0 && <div style={{ fontSize: 12.5, color: theme.textFaint }}>No events yet</div>}
@@ -1431,37 +1185,33 @@ function ErrorNote({ show, text, theme }) {
   return <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "#FF6B78", marginTop: -8, marginBottom: 14 }}><AlertCircle size={12} />{text}</div>;
 }
 
-// Single sport tile — deliberately its own component so the "selected"
-// look is derived from nothing but `isSelected`, with no way for stale
-// closures or leftover hover/focus state to make two tiles look chosen
-// at once.
-function SportTile({ sport, isSelected, onSelect, theme }) {
-  return (
-    <button
-      type="button"
-      onClick={() => onSelect(sport)}
-      className="press sport-tile"
-      style={{
-        padding: "12px 4px", borderRadius: 14, cursor: "pointer",
-        border: `1.5px solid ${isSelected ? SPORT_COLOR[sport] : theme.inputBorder}`,
-        background: isSelected ? `${SPORT_COLOR[sport]}18` : theme.inputBg,
-        display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
-        transition: "border-color 0.12s ease, background-color 0.12s ease",
-      }}
-    >
-      <span style={{ fontSize: 20 }}>{SPORT_ICON[sport]}</span>
-      <span style={{ fontSize: 10.5, color: isSelected ? SPORT_COLOR[sport] : theme.textDim, fontWeight: 600, textTransform: "capitalize" }}>{sport}</span>
-    </button>
-  );
-}
-
 function StepMatchDetails({ sport, setSport, teamA, setTeamA, teamB, setTeamB, visibility, setVisibility, sports, theme, showErrors }) {
   return (
     <>
       <label style={labelStyle(theme)}>Sport</label>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 20 }}>
         {sports.map(s => (
-          <SportTile key={s} sport={s} isSelected={sport === s} onSelect={setSport} theme={theme} />
+          <button
+            key={s}
+            type="button"
+            className="press sport-tile"
+            data-selected={sport === s ? "true" : "false"}
+            aria-pressed={sport === s}
+            onMouseDown={e => e.currentTarget.blur()}
+            onClick={() => setSport(s)}
+            style={{
+              padding: "12px 4px", borderRadius: 14, cursor: "pointer",
+              border: `1.5px solid ${sport === s ? SPORT_COLOR[s] : theme.inputBorder}`,
+              outline: "none", boxShadow: "none",
+              background: sport === s ? `${SPORT_COLOR[s]}18` : theme.inputBg,
+              color: sport === s ? SPORT_COLOR[s] : theme.textDim,
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+              transition: "border-color 0.1s ease, background-color 0.1s ease, color 0.1s ease",
+            }}
+          >
+            <span style={{ fontSize: 20 }}>{SPORT_ICON[s]}</span>
+            <span style={{ fontSize: 10.5, color: "inherit", fontWeight: 600, textTransform: "capitalize" }}>{s}</span>
+          </button>
         ))}
       </div>
       <label style={labelStyle(theme)}>Team / Player A <span style={{ color: "#FF6B78" }}>*</span></label>
@@ -1900,6 +1650,7 @@ function InstallButton({ theme, isDesktop }) {
 // ============================================================
 const NAV = [
   { id: "home", label: "Live", icon: Home },
+  { id: "matches", label: "Matches", icon: Calendar },
   { id: "explore", label: "Explore", icon: Search },
   { id: "create", label: "Create", icon: PlusCircle },
   { id: "leaderboard", label: "Ranks", icon: Trophy },
@@ -1925,7 +1676,7 @@ export default function App() {
   const [profile, setProfile] = useState(loadProfile);
   useEffect(() => saveSettings(settings), [settings]);
   useEffect(() => saveProfile(profile), [profile]);
-  useEffect(() => saveMatches(matches), [matches]);
+  useEffect(() => { const t = setTimeout(() => saveMatches(matches), 120); return () => clearTimeout(t); }, [matches]);
 
   const theme = useTheme(settings.darkMode);
 
@@ -1947,14 +1698,14 @@ export default function App() {
   const updateMatch = useCallback((id, mutator) => {
     setMatches(prev => prev.map(m => {
       if (m.id !== id) return m;
-      const draft = JSON.parse(JSON.stringify(m));
+      const draft = typeof structuredClone === "function" ? structuredClone(m) : JSON.parse(JSON.stringify(m));
       mutator(draft);
       return draft;
     }));
   }, []);
 
   const activeMatch = matches.find(m => m.id === activeMatchId) || null;
-  const openMatch = (m) => setActiveMatchId(m.id);
+  const openMatch = useCallback((m) => setActiveMatchId(m.id), []);
   const isOwnerOf = (m) => m.ownerId === deviceId;
 
   const showToast = useCallback((message, accent) => {
@@ -1973,19 +1724,22 @@ export default function App() {
       b: { name: teamB, short: teamB.slice(0, 3).toUpperCase(), score: isCricket ? "—" : 0, sets: (sport === "badminton" || sport === "volleyball") ? [] : undefined },
       minute: sport === "soccer" ? 0 : null, detail: isCricket && toss ? `${toss.winner === "a" ? teamA : teamB} won the toss, chose to ${toss.decision}` : "Just started",
       overLimit: isCricket ? overLimit : undefined,
+      innings: isCricket ? 1 : undefined,
+      inningsComplete: isCricket ? false : undefined,
+      completionReason: isCricket ? null : undefined,
+      firstInningsSummary: isCricket ? null : undefined,
+      inningsHistory: isCricket ? [] : undefined,
+      matchResult: null,
+      resultWinnerName: null,
+      resultText: null,
       balls: [], overHistory: [], events: [], batterStats: {}, bowlerStats: {},
       players: { a: playersA, b: playersB },
       captains: { a: captainA, b: captainB },
       dismissed: [],
       toss: toss || null,
-      // Openers are NOT auto-picked: the scorer must explicitly choose both
-      // striker and non-striker before the first ball can be scored.
-      striker: null,
-      nonStriker: null,
-      bowler: null,
-      innings: 1,
-      inningsComplete: false,
-      completionReason: null,
+      striker: isCricket ? (battingFirst === "a" ? playersA[0] : playersB[0]) : null,
+      nonStriker: isCricket ? (battingFirst === "a" ? playersA[1] : playersB[1]) : null,
+      bowler: isCricket ? (battingFirst === "a" ? playersB[0] : playersA[0]) : null,
     };
     if (isCricket && battingFirst === "b") {
       const tmp = newMatch.a; newMatch.a = { ...newMatch.b, score: "0/0", runs: 0, wickets: 0, ballsBowled: 0, overs: "0.0" }; newMatch.b = { ...tmp, score: "—" };
@@ -2027,22 +1781,19 @@ export default function App() {
         @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes slideUpSheet { from { transform: translateY(100%); } to { transform: translateY(0); } }
         @keyframes toastIn { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
-        @keyframes sheenMove { 0% { transform: translateX(-120%) skewX(-20deg); } 100% { transform: translateX(220%) skewX(-20deg); } }
-        .liquid-sheen { position: absolute; top: 0; left: 0; width: 40%; height: 100%; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent); animation: sheenMove 7s ease-in-out infinite; pointer-events: none; }
-        .match-card { transition: transform 0.15s cubic-bezier(.34,1.56,.64,1); }
-        .match-card:active { transform: scale(0.98); }
-        .press { transition: transform 0.12s cubic-bezier(.34,1.56,.64,1), opacity 0.12s ease; }
-        .press:active { transform: scale(0.94); opacity: 0.85; }
-        @media (min-width: 900px) { .match-card:hover { transform: translateY(-2px); } .press:hover { filter: brightness(1.08); } }
+        .liquid-sheen { position: absolute; inset: 0; pointer-events: none; }
+        .match-card { transition: transform 0.1s ease; contain: layout paint; content-visibility: auto; contain-intrinsic-size: 140px; }
+        .match-card:active { transform: scale(0.985); }
+        .press { transition: transform 0.08s ease, opacity 0.08s ease; }
+        .press:active { transform: scale(0.97); opacity: 0.92; }
+        .sport-tile:focus, .sport-tile:focus-visible { outline: none !important; box-shadow: none !important; }
+        @media (min-width: 900px) { .match-card:hover { transform: translateY(-1px); } .press:hover { filter: brightness(1.06); } }
         * { -webkit-tap-highlight-color: transparent; }
-        button { outline: none; border: 0; -webkit-appearance: none; appearance: none; }
-        button:focus, button:focus-visible, button:active { outline: none; }
-        button::-moz-focus-inner { border: 0; }
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-thumb { background: ${theme.dark ? "rgba(255,255,255,0.12)" : "rgba(18,24,31,0.15)"}; border-radius: 3px; }
         input:focus { border-color: ${theme.dark ? "rgba(255,255,255,0.3)" : "rgba(18,24,31,0.3)"} !important; }
         input::placeholder { color: ${theme.dark ? "rgba(255,255,255,0.25)" : "rgba(18,24,31,0.3)"}; }
-        button { will-change: transform; font-family: inherit; }
+        button { font-family: inherit; }
       `}</style>
 
       {isDesktop && (
@@ -2162,14 +1913,23 @@ export default function App() {
                   </div>
                 </>
               )}
-              {finalMatches.length > 0 && (
-                <>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: theme.textFaint, margin: "24px 0 12px", letterSpacing: "0.02em" }}>RECENT RESULTS</div>
-                  <div style={feedGridStyle}>
-                    {finalMatches.map(m => <MatchCard key={m.id} m={m} onOpen={openMatch} theme={theme} isOwner={isOwnerOf(m)} />)}
-                  </div>
-                </>
-              )}
+            </div>
+          ) : tab === "matches" ? (
+            <div style={{ animation: "fadeIn 0.2s ease" }}>
+              <h1 style={{ fontFamily: "Space Grotesk", fontSize: 26, fontWeight: 700, margin: "0 0 16px", color: theme.text }}>Matches</h1>
+              {liveMatches.length > 0 && <>
+                <div style={{ fontSize: 12, fontWeight: 700, color: theme.textFaint, margin: "0 0 12px", letterSpacing: "0.02em" }}>LIVE</div>
+                <div style={feedGridStyle}>{liveMatches.map(m => <MatchCard key={m.id} m={m} onOpen={openMatch} theme={theme} isOwner={isOwnerOf(m)} />)}</div>
+              </>}
+              {upcomingMatches.length > 0 && <>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "24px 0 12px" }}><Calendar size={13} color={theme.textFaint} /><span style={{ fontSize: 12, fontWeight: 700, color: theme.textFaint, letterSpacing: "0.02em" }}>UPCOMING</span></div>
+                <div style={feedGridStyle}>{upcomingMatches.map(m => <UpcomingCard key={m.id} m={m} onOpen={openMatch} theme={theme} isOwner={isOwnerOf(m)} />)}</div>
+              </>}
+              {finalMatches.length > 0 && <>
+                <div style={{ fontSize: 12, fontWeight: 700, color: theme.textFaint, margin: "24px 0 12px", letterSpacing: "0.02em" }}>ENDED</div>
+                <div style={feedGridStyle}>{finalMatches.map(m => <MatchCard key={m.id} m={m} onOpen={openMatch} theme={theme} isOwner={isOwnerOf(m)} />)}</div>
+              </>}
+              {liveMatches.length === 0 && upcomingMatches.length === 0 && finalMatches.length === 0 && <div style={{ padding: "44px 18px", textAlign: "center", color: theme.textFaint }}>No matches yet.</div>}
             </div>
           ) : tab === "explore" ? (
             <div style={{ animation: "fadeIn 0.3s ease" }}>

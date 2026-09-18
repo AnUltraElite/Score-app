@@ -23,11 +23,7 @@ export function displayBall(ball) {
   return "?";
 }
 
-// Colored outcomes (wicket/boundary/extra/bye) use fixed accent colors that
-// read fine on both light and dark backgrounds. The plain dot-ball/single-run
-// case has no accent, so it must follow the active theme's text/background —
-// hardcoding white here was invisible on the light theme's pale chip background.
-export function ballChipStyle(ball, theme) {
+export function ballChipStyle(ball) {
   const isWicket = ball === "W" || ball?.type === "wicket";
   const isBoundary = ball === 4 || ball === 6;
   const isExtra = ball?.type === "wide" || ball?.type === "noball";
@@ -36,9 +32,6 @@ export function ballChipStyle(ball, theme) {
   if (isBoundary) return { bg: "rgba(255,184,0,0.14)", fg: "#FFC933", bd: "rgba(255,184,0,0.4)" };
   if (isExtra) return { bg: "rgba(78,197,255,0.12)", fg: "#4EC5FF", bd: "rgba(78,197,255,0.35)" };
   if (isByeType) return { bg: "rgba(185,139,255,0.12)", fg: "#B98BFF", bd: "rgba(185,139,255,0.35)" };
-  if (theme && !theme.dark) {
-    return { bg: "rgba(18,24,31,0.06)", fg: "#12181F", bd: "rgba(18,24,31,0.14)" };
-  }
   return { bg: "rgba(255,255,255,0.06)", fg: "#fff", bd: "rgba(255,255,255,0.12)" };
 }
 
@@ -74,13 +67,7 @@ export function rotatesStrike(ball) {
 // Apply one committed ball to a cricket innings draft (mutates draft.a in place).
 // draft shape expected: { a: { runs, wickets, ballsBowled }, balls: [...currentOverBalls], overHistory: [...] , striker, nonStriker, bowler }
 // Returns { overJustCompleted: bool } so callers (UI) can react, e.g. show a toast.
-// Refuses to score if the innings is flagged complete (e.g. overs finished,
-// all out) and hasn't been resolved yet — enforces "no ball can be
-// delivered" until the scorer starts the next innings or raises the limit.
 export function applyBall(draft, ball) {
-  if (draft.inningsComplete) return draft;
-  if (!draft.striker || !draft.nonStriker) return draft; // both batters must be set before any ball is scored
-
   if (!draft.balls) draft.balls = [];
   if (!draft.overHistory) draft.overHistory = [];
 
@@ -228,112 +215,71 @@ export function formatOvers(legalBalls) {
   return `${overs}.${balls}`;
 }
 
-// ============================================================
-// INNINGS COMPLETION
-// ============================================================
-// Cricket doesn't allow a lone batter ("last man"/"last woman" stands) —
-// an innings with a squad of N batters ends once N-1 are out, because
-// there's no partner left to run with. With a squad of N, the maximum
-// wickets that can fall is N-1.
+
+// ---------- Innings / match result helpers ----------
 export function maxWicketsFor(squadSize) {
-  if (!squadSize || squadSize < 2) return 0;
-  return squadSize - 1;
+  const n = Number(squadSize);
+  if (!Number.isFinite(n) || n <= 1) return 10;
+  return Math.max(1, Math.min(10, n - 1));
 }
 
-// Works out whether the batting side's innings should stop right now, and
-// why. Doesn't mutate anything — callers decide what to do with the result.
-// target: runs the batting side needs to win, only relevant in the 2nd innings.
-export function checkInningsComplete(draft, squadSize, target) {
-  const ballsBowled = draft.a.ballsBowled || 0;
-  const wickets = draft.a.wickets || 0;
-  const runs = draft.a.runs || 0;
-  const oversLimitBalls = (draft.overLimit || 0) * 6;
+export function summarizeInnings({ teamName, team, overLimit } = {}) {
+  const ballsBowled = team?.ballsBowled || 0;
+  return {
+    teamName: teamName || team?.name || "Team",
+    runs: team?.runs || 0,
+    wickets: team?.wickets || 0,
+    ballsBowled,
+    overs: team?.overs || formatOvers(ballsBowled),
+    score: `${team?.runs || 0}/${team?.wickets || 0}`,
+    overLimit: overLimit || null,
+  };
+}
 
-  if (typeof target === "number" && runs >= target) {
-    return { complete: true, reason: "target" };
-  }
-  if (wickets >= maxWicketsFor(squadSize)) {
-    return { complete: true, reason: "wickets" };
-  }
-  if (oversLimitBalls > 0 && ballsBowled >= oversLimitBalls) {
-    return { complete: true, reason: "overs" };
-  }
+export function checkInningsComplete({
+  innings = 1,
+  runs = 0,
+  wickets = 0,
+  ballsBowled = 0,
+  overLimit,
+  squadSize,
+  targetRuns,
+} = {}) {
+  const wicketLimit = maxWicketsFor(squadSize);
+  const allOut = wickets >= wicketLimit;
+  const oversComplete = Number.isFinite(Number(overLimit)) && Number(overLimit) > 0 && ballsBowled >= Number(overLimit) * 6;
+  const targetChased = innings === 2 && Number.isFinite(Number(targetRuns)) && runs > Number(targetRuns);
+
+  if (targetChased) return { complete: true, reason: "target_chased" };
+  if (allOut) return { complete: true, reason: "all_out" };
+  if (oversComplete) return { complete: true, reason: "over_limit" };
   return { complete: false, reason: null };
 }
 
-// Chase math for the 2nd innings: current run rate, required run rate,
-// and a plain-English "need X runs off Y balls" line.
-export function chaseStats({ target, runsScored, ballsBowled, totalBalls }) {
-  const ballsRemaining = Math.max(0, totalBalls - ballsBowled);
-  const runsNeeded = Math.max(0, target - runsScored);
-  const oversBowled = (ballsBowled || 0) / 6;
-  const currentRunRate = oversBowled > 0 ? runsScored / oversBowled : 0;
-  const requiredRunRate = ballsRemaining > 0 ? (runsNeeded / ballsRemaining) * 6 : 0;
-  return {
-    runsNeeded,
-    ballsRemaining,
-    currentRunRate: Math.round(currentRunRate * 100) / 100,
-    requiredRunRate: Math.round(requiredRunRate * 100) / 100,
-  };
-}
+export function computeMatchResult({ firstInnings, secondInningsTeam, secondSquadSize, overLimit } = {}) {
+  const firstRuns = Number(firstInnings?.runs || 0);
+  const secondRuns = Number(secondInningsTeam?.runs || 0);
 
-// Builds the frozen summary of a just-finished innings, for display once
-// the 2nd innings starts and on the final result screen. Captures the full
-// scorecard — not just the top-line score — so "view previous innings"
-// and the match-result screen can show real batting/bowling figures rather
-// than just a score line.
-export function summarizeInnings(draft, teamName, bowlingTeamName) {
-  return {
-    teamName,
-    bowlingTeamName,
-    runs: draft.a.runs || 0,
-    wickets: draft.a.wickets || 0,
-    overs: draft.a.overs || "0.0",
-    overLimit: draft.overLimit || null,
-    batterStats: draft.batterStats ? { ...draft.batterStats } : {},
-    bowlerStats: draft.bowlerStats ? { ...draft.bowlerStats } : {},
-    dismissed: draft.dismissed ? [...draft.dismissed] : [],
-    battingOrder: draft.players?.a ? [...draft.players.a] : [],
-    bowlingOrder: draft.players?.b ? [...draft.players.b] : [],
-  };
-}
-
-// ============================================================
-// MATCH RESULT
-// ============================================================
-// Standard limited-overs result wording:
-//   - If the side batting FIRST wins (the chasing side was bowled out or
-//     didn't reach the target before overs ran out): "<Team> won by N runs".
-//   - If the side batting SECOND wins (reached the target before running out
-//     of overs/wickets): "<Team> won by N wickets, with M balls remaining" —
-//     wickets remaining = squad's max wickets (no-last-man limit) minus
-//     wickets actually lost; balls remaining = overs limit minus balls used.
-//   - Equal scores after both completed innings is a tie.
-export function computeMatchResult({ firstInnings, secondInningsTeam, secondSquadSize, overLimit }) {
-  const firstRuns = firstInnings.runs;
-  const secondRuns = secondInningsTeam.runs || 0;
+  if (secondRuns === firstRuns) {
+    return { winner: "tie", marginType: "tie", margin: 0, summary: "Match tied" };
+  }
 
   if (secondRuns > firstRuns) {
-    const maxWickets = maxWicketsFor(secondSquadSize);
-    const wicketsRemaining = Math.max(0, maxWickets - (secondInningsTeam.wickets || 0));
-    const ballsUsed = secondInningsTeam.ballsBowled || 0;
-    const ballsRemaining = Math.max(0, (overLimit || 0) * 6 - ballsUsed);
+    const wicketsRemaining = Math.max(0, maxWicketsFor(secondSquadSize) - Number(secondInningsTeam?.wickets || 0));
     return {
       winner: "second",
-      margin: "wickets",
-      wicketsRemaining,
-      ballsRemaining,
-      summary: `Won by ${wicketsRemaining} wicket${wicketsRemaining === 1 ? "" : "s"}, with ${ballsRemaining} ball${ballsRemaining === 1 ? "" : "s"} remaining`,
+      marginType: "wickets",
+      margin: wicketsRemaining,
+      ballsRemaining: Number.isFinite(Number(overLimit)) ? Math.max(0, Number(overLimit) * 6 - Number(secondInningsTeam?.ballsBowled || 0)) : null,
+      summary: `Won by ${wicketsRemaining} wicket${wicketsRemaining === 1 ? "" : "s"}`,
     };
   }
-  if (secondRuns < firstRuns) {
-    const runMargin = firstRuns - secondRuns;
-    return {
-      winner: "first",
-      margin: "runs",
-      runMargin,
-      summary: `Won by ${runMargin} run${runMargin === 1 ? "" : "s"}`,
-    };
-  }
-  return { winner: "tie", margin: "tie", summary: "Match tied" };
+
+  const runsMargin = firstRuns - secondRuns;
+  return {
+    winner: "first",
+    marginType: "runs",
+    margin: runsMargin,
+    summary: `Won by ${runsMargin} run${runsMargin === 1 ? "" : "s"}`,
+  };
 }
