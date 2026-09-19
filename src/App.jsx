@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   Home, Trophy, PlusCircle, User, Search, ChevronLeft, Lock, Globe,
   Flame, X, Users, Settings, Bell, Shield, Moon, Sun, ChevronRight,
@@ -117,6 +117,14 @@ function useTheme(dark) {
     glassShadow: dark ? "inset 0 1px 0 rgba(255,255,255,0.08), 0 8px 24px -12px rgba(0,0,0,0.5)" : "inset 0 1px 0 rgba(255,255,255,0.6), 0 8px 24px -12px rgba(18,24,31,0.15)",
     inputBg: dark ? "rgba(255,255,255,0.04)" : "rgba(18,24,31,0.04)",
     inputBorder: dark ? "1px solid rgba(255,255,255,0.1)" : "1px solid rgba(18,24,31,0.12)",
+    // Color-only token (no "1px solid " prefix) — use this whenever a
+    // border color needs to be interpolated inside another template
+    // string (e.g. toggle buttons choosing between an accent color and
+    // the neutral color). Composing full shorthand strings inside each
+    // other silently produces invalid CSS that browsers reject wholesale,
+    // leaving a stale border in place — this token exists specifically to
+    // avoid that trap.
+    inputBorderColor: dark ? "rgba(255,255,255,0.1)" : "rgba(18,24,31,0.12)",
     hairline: dark ? "rgba(255,255,255,0.05)" : "rgba(18,24,31,0.07)",
     chipBg: dark ? "rgba(255,255,255,0.06)" : "rgba(18,24,31,0.05)",
     surface: dark ? "#12181F" : "#ffffff",
@@ -137,7 +145,13 @@ function Glass({ children, style, onClick, className, tint, theme }) {
         background: tint ? `linear-gradient(155deg, ${tint}14, ${theme.dark ? "rgba(255,255,255,0.03)" : "rgba(255,255,255,0.7)"} 60%)` : theme.glassBg,
         border: theme.glassBorder,
         boxShadow: theme.glassShadow,
-        backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+        // Backdrop blur is genuinely expensive to keep recomputing during
+        // scroll, and this component renders dozens of times per screen
+        // (every match card, every list row). 12px reads as visually
+        // identical to 20px against these translucent fills but costs
+        // noticeably less to composite — the earlier 20px value was
+        // chosen for looks alone without checking scroll cost.
+        backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
         borderRadius: 20, ...style,
       }}
     >
@@ -153,13 +167,12 @@ function LiquidGlassShell({ children, style, theme }) {
       background: theme.dark
         ? "linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.03) 40%, rgba(255,255,255,0.05))"
         : "linear-gradient(180deg, rgba(255,255,255,0.85), rgba(255,255,255,0.6) 40%, rgba(255,255,255,0.75))",
-      backdropFilter: "blur(28px) saturate(1.6)", WebkitBackdropFilter: "blur(28px) saturate(1.6)",
+      backdropFilter: "blur(20px) saturate(1.4)", WebkitBackdropFilter: "blur(20px) saturate(1.4)",
       boxShadow: theme.dark
         ? "inset 0 1px 0 rgba(255,255,255,0.14), inset 0 -1px 0 rgba(255,255,255,0.04), 0 -8px 32px -8px rgba(0,0,0,0.45)"
         : "inset 0 1px 0 rgba(255,255,255,0.9), 0 -8px 32px -8px rgba(18,24,31,0.12)",
       overflow: "hidden", ...style,
     }}>
-      <div className="liquid-sheen" />
       {children}
     </div>
   );
@@ -245,9 +258,17 @@ function actionBtn(theme, accentColor) {
 // ============================================================
 // MATCH / UPCOMING CARDS
 // ============================================================
-function MatchCard({ m, onOpen, theme, isOwner }) {
+// Memoized: with dozens of these in a scrolling feed and matches state
+// updating every few seconds (the live-minute ticker) or every scoring
+// tap, re-rendering every card on every update was the actual jank
+// source — verified by tracing which state changes touched which
+// components, not assumed. React.memo skips re-render for any card
+// whose own props are unchanged, so a tick to match m1 no longer forces
+// every other card in the feed to redo work.
+const MatchCard = React.memo(function MatchCard({ m, onOpen, theme, isOwner }) {
   const color = SPORT_COLOR[m.sport];
   const isLive = m.status === "live";
+  const isEnded = m.status === "final";
   return (
     <Glass onClick={() => onOpen(m)} theme={theme} style={{ padding: 16, cursor: "pointer", position: "relative", overflow: "hidden", marginBottom: 12 }} className="match-card">
       <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: color, opacity: isLive ? 1 : 0.3 }} />
@@ -260,16 +281,31 @@ function MatchCard({ m, onOpen, theme, isOwner }) {
             <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, fontWeight: 700, color: "#4EC5FF", background: "rgba(78,197,255,0.12)", padding: "2px 6px", borderRadius: 999 }}><PenLine size={9} />YOURS</span>
           ) : null}
         </div>
-        {isLive ? <LivePill small /> : <span style={{ fontSize: 10.5, color: theme.textFaint, fontWeight: 600 }}>{m.status === "final" ? "FT" : "UPCOMING"}</span>}
+        {isLive ? <LivePill small /> : (
+          <span style={{
+            fontSize: 10.5, fontWeight: 700, letterSpacing: "0.03em",
+            color: isEnded ? theme.textDim : theme.textFaint,
+            background: isEnded ? theme.chipBg : "transparent",
+            padding: isEnded ? "3px 8px" : 0, borderRadius: 999,
+          }}>
+            {isEnded ? "ENDED" : "UPCOMING"}
+          </span>
+        )}
       </div>
       <div style={{ flex: 1 }}>
         <Row team={m.a} highlight={isLive} theme={theme} />
         <Row team={m.b} highlight={isLive} theme={theme} />
       </div>
-      <div style={{ marginTop: 10, fontSize: 11.5, color: theme.textFaint }}>{m.detail}{m.minute ? ` · ${m.minute}'` : ""}</div>
+      {isEnded && m.matchResult ? (
+        <div style={{ marginTop: 10, fontSize: 11.5, color, fontWeight: 600 }}>
+          {m.matchResult.winner === "tie" ? "Match tied" : `${m.matchResult.winner === "first" ? m.firstInningsSummary?.teamName : m.a.name} · ${m.matchResult.summary}`}
+        </div>
+      ) : (
+        <div style={{ marginTop: 10, fontSize: 11.5, color: theme.textFaint }}>{m.detail}{m.minute ? ` · ${m.minute}'` : ""}</div>
+      )}
     </Glass>
   );
-}
+});
 
 function Row({ team, highlight, theme }) {
   return (
@@ -285,7 +321,7 @@ function Row({ team, highlight, theme }) {
   );
 }
 
-function UpcomingCard({ m, onOpen, theme, isOwner }) {
+const UpcomingCard = React.memo(function UpcomingCard({ m, onOpen, theme, isOwner }) {
   const color = SPORT_COLOR[m.sport];
   return (
     <Glass onClick={() => onOpen(m)} tint={color} theme={theme} style={{ padding: 14, cursor: "pointer", marginBottom: 10 }} className="match-card">
@@ -304,7 +340,7 @@ function UpcomingCard({ m, onOpen, theme, isOwner }) {
       </div>
     </Glass>
   );
-}
+});
 
 // ============================================================
 // MATCH DETAIL ROUTER
@@ -327,7 +363,7 @@ function MatchDetail({ m, onBack, onUpdate, theme, isDesktop, isOwner, onToast }
             <button
               onClick={() => setVisibility(v => v === "public" ? "private" : "public")}
               className="press"
-              style={{ ...ghostBtn(theme), border: `1px solid ${visibility === "public" ? "rgba(61,220,151,0.4)" : theme.inputBorder}`, color: visibility === "public" ? "#3DDC97" : theme.textDim }}
+              style={{ ...ghostBtn(theme), border: `1px solid ${visibility === "public" ? "rgba(61,220,151,0.4)" : theme.inputBorderColor}`, color: visibility === "public" ? "#3DDC97" : theme.textDim }}
             >
               {visibility === "public" ? <Globe size={14} /> : <Lock size={14} />}
               <span style={{ fontSize: 12.5, fontWeight: 600, textTransform: "capitalize" }}>{visibility}</span>
@@ -478,6 +514,21 @@ function CricketScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwn
       if (result.complete && !draft.inningsComplete) {
         draft.inningsComplete = true;
         draft.completionReason = result.reason;
+
+        // If this was the 2nd innings, the MATCH is now over, not just the
+        // innings — freeze the result and flip status so the feed and
+        // profile can stop treating this as a live match.
+        if (draft.innings === 2 && draft.firstInningsSummary) {
+          const matchResult = computeMatchResult({
+            firstInnings: draft.firstInningsSummary,
+            secondInningsTeam: draft.a,
+            secondSquadSize: battingSquadSize,
+            overLimit: draft.overLimit,
+          });
+          draft.status = "final";
+          draft.matchResult = matchResult;
+          draft.detail = matchResult.summary;
+        }
       }
     });
     setPending(null);
@@ -495,6 +546,12 @@ function CricketScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwn
       if (!result.complete) {
         draft.inningsComplete = false;
         draft.completionReason = null;
+        // Undoing the ball that ended the match reopens it — revert the
+        // "final" status and drop the frozen result so scoring can resume.
+        if (draft.status === "final") {
+          draft.status = "live";
+          draft.matchResult = null;
+        }
       }
     });
     setPopupDismissed(false);
@@ -571,14 +628,14 @@ function CricketScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwn
 
   // Match is fully over once the 2nd innings itself has completed.
   const matchOver = innings === 2 && m.inningsComplete;
-  const matchResult = matchOver
+  const matchResult = m.matchResult || (matchOver
     ? computeMatchResult({
         firstInnings: m.firstInningsSummary,
         secondInningsTeam: m.a,
         secondSquadSize: battingSquadSize,
         overLimit: m.overLimit,
       })
-    : null;
+    : null);
 
   const scoringPad = (
     <>
@@ -1030,7 +1087,7 @@ function PlayerSlot({ label, value, onClick, accent, highlight, theme, disabled,
   return (
     <button onClick={onClick} disabled={disabled} className="press" style={{
       flex: 1, padding: "8px 6px", borderRadius: 12, cursor: disabled ? "default" : "pointer", textAlign: "center",
-      border: `1px solid ${needsAttention ? "rgba(255,184,0,0.5)" : highlight && value ? accent + "50" : theme.inputBorder}`,
+      border: `1px solid ${needsAttention ? "rgba(255,184,0,0.5)" : highlight && value ? accent + "50" : theme.inputBorderColor}`,
       background: needsAttention ? "rgba(255,184,0,0.1)" : highlight && value ? accent + "12" : theme.inputBg,
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 3, fontSize: 8.5, fontWeight: 700, color: theme.textFaint, letterSpacing: "0.03em", marginBottom: 3 }}>
@@ -1238,7 +1295,7 @@ function SoccerScorer({ m, color, visibility, onUpdate, theme, isDesktop, isOwne
               {["a", "b"].map(side => (
                 <button key={side} onClick={() => setPendingSide(pendingSide === side ? null : side)} className="press" style={{
                   flex: 1, padding: "10px 0", borderRadius: 12, cursor: "pointer", fontSize: 12.5, fontWeight: 700,
-                  border: `1.5px solid ${pendingSide === side ? color : theme.inputBorder}`,
+                  border: `1.5px solid ${pendingSide === side ? color : theme.inputBorderColor}`,
                   background: pendingSide === side ? `${color}18` : theme.inputBg,
                   color: pendingSide === side ? color : theme.textDim,
                 }}>{m[side].short}</button>
@@ -1443,7 +1500,7 @@ function SportTile({ sport, isSelected, onSelect, theme }) {
       className="press sport-tile"
       style={{
         padding: "12px 4px", borderRadius: 14, cursor: "pointer",
-        border: `1.5px solid ${isSelected ? SPORT_COLOR[sport] : theme.inputBorder}`,
+        border: `1.5px solid ${isSelected ? SPORT_COLOR[sport] : theme.inputBorderColor}`,
         background: isSelected ? `${SPORT_COLOR[sport]}18` : theme.inputBg,
         display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
         transition: "border-color 0.12s ease, background-color 0.12s ease",
@@ -1472,7 +1529,7 @@ function StepMatchDetails({ sport, setSport, teamA, setTeamA, teamB, setTeamB, v
       <label style={labelStyle(theme)}>Visibility</label>
       <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
         {["private", "public"].map(v => (
-          <button key={v} onClick={() => setVisibility(v)} className="press" style={{ flex: 1, padding: "12px 0", borderRadius: 14, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, border: `1.5px solid ${visibility === v ? "#3DDC97" : theme.inputBorder}`, background: visibility === v ? "rgba(61,220,151,0.1)" : theme.inputBg, color: visibility === v ? "#3DDC97" : theme.textDim, fontWeight: 600, fontSize: 13.5, textTransform: "capitalize" }}>{v === "public" ? <Globe size={14} /> : <Lock size={14} />} {v}</button>
+          <button key={v} onClick={() => setVisibility(v)} className="press" style={{ flex: 1, padding: "12px 0", borderRadius: 14, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, border: `1.5px solid ${visibility === v ? "#3DDC97" : theme.inputBorderColor}`, background: visibility === v ? "rgba(61,220,151,0.1)" : theme.inputBg, color: visibility === v ? "#3DDC97" : theme.textDim, fontWeight: 600, fontSize: 13.5, textTransform: "capitalize" }}>{v === "public" ? <Globe size={14} /> : <Lock size={14} />} {v}</button>
         ))}
       </div>
       <p style={{ fontSize: 11.5, color: theme.textFaint, marginTop: 0, lineHeight: 1.5 }}>{visibility === "public" ? "Anyone on the platform can find and watch this match live." : "Only people with the match link can watch."}</p>
@@ -1499,7 +1556,7 @@ function PlayerSlotRow({ index, value, onChange, isCaptain, onToggleCaptain, the
         className="press"
         style={{
           width: 38, height: 46, borderRadius: 12,
-          border: `1px solid ${isCaptain ? "rgba(255,184,0,0.4)" : theme.inputBorder}`,
+          border: `1px solid ${isCaptain ? "rgba(255,184,0,0.4)" : theme.inputBorderColor}`,
           background: isCaptain ? "rgba(255,184,0,0.14)" : theme.inputBg,
           cursor: value ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
         }}
@@ -1535,7 +1592,7 @@ function StepSquads({ teamA, teamB, color, theme, countA, setCountA, countB, set
           const name = s === "a" ? teamA : teamB;
           const incomplete = s === "a" ? (playersA.filter(p => p.trim()).length !== countA || !captainA) : (playersB.filter(p => p.trim()).length !== countB || !captainB);
           return (
-            <button key={s} onClick={() => setTeamSide(s)} className="press" style={{ flex: 1, padding: "11px 0", borderRadius: 13, cursor: "pointer", fontSize: 13.5, fontWeight: 700, border: `1.5px solid ${teamSide === s ? color : theme.inputBorder}`, background: teamSide === s ? `${color}18` : theme.inputBg, color: teamSide === s ? color : theme.textDim, position: "relative" }}>
+            <button key={s} onClick={() => setTeamSide(s)} className="press" style={{ flex: 1, padding: "11px 0", borderRadius: 13, cursor: "pointer", fontSize: 13.5, fontWeight: 700, border: `1.5px solid ${teamSide === s ? color : theme.inputBorderColor}`, background: teamSide === s ? `${color}18` : theme.inputBg, color: teamSide === s ? color : theme.textDim, position: "relative" }}>
               {name || (s === "a" ? "Team A" : "Team B")}
               {showErrors && incomplete && <span style={{ position: "absolute", top: 6, right: 8, width: 6, height: 6, borderRadius: 999, background: "#FF6B78" }} />}
             </button>
@@ -1578,7 +1635,7 @@ function StepToss({ teamA, teamB, color, tossWinner, setTossWinner, tossDecision
       <label style={labelStyle(theme)}>Who won the toss? <span style={{ color: "#FF6B78" }}>*</span></label>
       <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
         {[["a", teamA], ["b", teamB]].map(([s, name]) => (
-          <button key={s} onClick={() => setTossWinner(s)} className="press" style={{ flex: 1, padding: "16px 8px", borderRadius: 14, cursor: "pointer", border: `1.5px solid ${tossWinner === s ? color : theme.inputBorder}`, background: tossWinner === s ? `${color}18` : theme.inputBg, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+          <button key={s} onClick={() => setTossWinner(s)} className="press" style={{ flex: 1, padding: "16px 8px", borderRadius: 14, cursor: "pointer", border: `1.5px solid ${tossWinner === s ? color : theme.inputBorderColor}`, background: tossWinner === s ? `${color}18` : theme.inputBg, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
             <Coins size={18} color={tossWinner === s ? color : theme.textFaint} />
             <span style={{ fontSize: 13.5, fontWeight: 700, color: tossWinner === s ? color : theme.textDim }}>{name}</span>
           </button>
@@ -1588,7 +1645,7 @@ function StepToss({ teamA, teamB, color, tossWinner, setTossWinner, tossDecision
       <label style={labelStyle(theme)}>What did they choose? <span style={{ color: "#FF6B78" }}>*</span></label>
       <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
         {["bat", "bowl"].map(d => (
-          <button key={d} disabled={!tossWinner} onClick={() => setTossDecision(d)} className="press" style={{ flex: 1, padding: "14px 0", borderRadius: 14, cursor: tossWinner ? "pointer" : "not-allowed", border: `1.5px solid ${tossDecision === d ? color : theme.inputBorder}`, background: tossDecision === d ? `${color}18` : theme.inputBg, color: !tossWinner ? theme.textFaint : tossDecision === d ? color : theme.textDim, fontWeight: 700, fontSize: 13.5, textTransform: "capitalize" }}>{d} first</button>
+          <button key={d} disabled={!tossWinner} onClick={() => setTossDecision(d)} className="press" style={{ flex: 1, padding: "14px 0", borderRadius: 14, cursor: tossWinner ? "pointer" : "not-allowed", border: `1.5px solid ${tossDecision === d ? color : theme.inputBorderColor}`, background: tossDecision === d ? `${color}18` : theme.inputBg, color: !tossWinner ? theme.textFaint : tossDecision === d ? color : theme.textDim, fontWeight: 700, fontSize: 13.5, textTransform: "capitalize" }}>{d} first</button>
         ))}
       </div>
       <ErrorNote show={showErrors} text="Select who won the toss and what they chose." theme={theme} />
@@ -1642,7 +1699,7 @@ function StepReview({ sport, teamA, teamB, visibility, playersA, playersB, capta
 // ============================================================
 // PROFILE + SETTINGS (persisted)
 // ============================================================
-function Profile({ onOpenSettings, theme, profile, ownedCount, sportsUsed, publicCount }) {
+function Profile({ onOpenSettings, onOpenMatches, theme, profile, ownedCount, sportsUsed, publicCount }) {
   const initial = (profile.name || "?")[0].toUpperCase();
   return (
     <div style={{ animation: "fadeIn 0.3s ease" }}>
@@ -1660,13 +1717,52 @@ function Profile({ onOpenSettings, theme, profile, ownedCount, sportsUsed, publi
         </div>
       </Glass>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 20 }}>
-        {[[String(ownedCount), "Matches", Trophy], [String(sportsUsed), "Sports", Zap], [String(publicCount), "Public", Globe]].map(([n, l, Icon]) => (
+        <button onClick={onOpenMatches} className="press" style={{ cursor: "pointer", textAlign: "left" }}>
+          <Glass theme={theme} style={{ padding: "16px 8px", textAlign: "center" }}>
+            <Trophy size={14} color={theme.textFaint} style={{ marginBottom: 6 }} />
+            <div style={{ fontFamily: "Space Grotesk", fontWeight: 700, fontSize: 20, color: theme.text }}>{ownedCount}</div>
+            <div style={{ fontSize: 10.5, color: theme.textFaint, marginTop: 2 }}>Matches</div>
+          </Glass>
+        </button>
+        {[[String(sportsUsed), "Sports", Zap], [String(publicCount), "Public", Globe]].map(([n, l, Icon]) => (
           <Glass key={l} theme={theme} style={{ padding: "16px 8px", textAlign: "center" }}>
             <Icon size={14} color={theme.textFaint} style={{ marginBottom: 6 }} />
             <div style={{ fontFamily: "Space Grotesk", fontWeight: 700, fontSize: 20, color: theme.text }}>{n}</div>
             <div style={{ fontSize: 10.5, color: theme.textFaint, marginTop: 2 }}>{l}</div>
           </Glass>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Matches list: reached from the profile's "Matches" stat ----------
+// Live matches first, then ended ones — per spec. Scheduled/upcoming
+// matches the person owns are included too, sorted after live, before ended,
+// so nothing the person created goes missing from this one list.
+function MatchesPanel({ matches, onOpen, onClose, theme }) {
+  const live = matches.filter(m => m.status === "live");
+  const upcoming = matches.filter(m => m.status === "scheduled");
+  const ended = matches.filter(m => m.status === "final");
+
+  const Section = ({ title, list }) => list.length === 0 ? null : (
+    <>
+      <div style={{ fontSize: 11.5, fontWeight: 700, color: theme.textFaint, letterSpacing: "0.03em", margin: "18px 0 10px" }}>{title}</div>
+      {list.map(m => <MatchCard key={m.id} m={m} onOpen={onOpen} theme={theme} isOwner={true} />)}
+    </>
+  );
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: theme.bg, zIndex: 130, overflowY: "auto", animation: "fadeIn 0.2s ease" }}>
+      <div style={{ position: "sticky", top: 0, background: theme.dark ? "rgba(10,14,18,0.92)" : "rgba(244,246,248,0.92)", backdropFilter: "blur(20px)", borderBottom: `1px solid ${theme.hairline}`, padding: "16px 18px", display: "flex", alignItems: "center", gap: 12, zIndex: 5 }}>
+        <button onClick={onClose} className="press" style={ghostBtn(theme)}><ChevronLeft size={18} /><span style={{ fontSize: 14 }}>Back</span></button>
+        <h2 style={{ fontFamily: "Space Grotesk", fontSize: 18, fontWeight: 700, margin: 0, color: theme.text }}>Your matches</h2>
+      </div>
+      <div style={{ padding: 18, maxWidth: 640, margin: "0 auto" }}>
+        {matches.length === 0 && <div style={{ fontSize: 13, color: theme.textFaint, textAlign: "center", marginTop: 40 }}>You haven't created any matches yet.</div>}
+        <Section title="LIVE" list={live} />
+        <Section title="UPCOMING" list={upcoming} />
+        <Section title="ENDED" list={ended} />
       </div>
     </div>
   );
@@ -1916,6 +2012,7 @@ export default function App() {
   const [activeMatchId, setActiveMatchId] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showMatchesPanel, setShowMatchesPanel] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [toast, setToast] = useState(null);
   const [isDesktop, setIsDesktop] = useState(typeof window !== "undefined" ? window.innerWidth >= 900 : true);
@@ -1954,8 +2051,13 @@ export default function App() {
   }, []);
 
   const activeMatch = matches.find(m => m.id === activeMatchId) || null;
-  const openMatch = (m) => setActiveMatchId(m.id);
-  const isOwnerOf = (m) => m.ownerId === deviceId;
+  // Stabilized with useCallback: this is passed as the onOpen prop to every
+  // memoized MatchCard/UpcomingCard in the feed. A fresh function reference
+  // on every render would make React.memo's prop comparison always see
+  // "changed" and re-render every card anyway, silently defeating the
+  // memoization above.
+  const openMatch = useCallback((m) => setActiveMatchId(m.id), []);
+  const isOwnerOf = useCallback((m) => m.ownerId === deviceId, [deviceId]);
 
   const showToast = useCallback((message, accent) => {
     setToast({ message, accent, key: Date.now() });
@@ -2027,22 +2129,32 @@ export default function App() {
         @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes slideUpSheet { from { transform: translateY(100%); } to { transform: translateY(0); } }
         @keyframes toastIn { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
-        @keyframes sheenMove { 0% { transform: translateX(-120%) skewX(-20deg); } 100% { transform: translateX(220%) skewX(-20deg); } }
-        .liquid-sheen { position: absolute; top: 0; left: 0; width: 40%; height: 100%; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent); animation: sheenMove 7s ease-in-out infinite; pointer-events: none; }
         .match-card { transition: transform 0.15s cubic-bezier(.34,1.56,.64,1); }
         .match-card:active { transform: scale(0.98); }
         .press { transition: transform 0.12s cubic-bezier(.34,1.56,.64,1), opacity 0.12s ease; }
         .press:active { transform: scale(0.94); opacity: 0.85; }
-        @media (min-width: 900px) { .match-card:hover { transform: translateY(-2px); } .press:hover { filter: brightness(1.08); } }
+        /* will-change is applied only while a press/hover is actually
+           happening (below), not globally — reserving a GPU layer for
+           every button on screen at once (dozens, on the scoring pad)
+           made the compositor do more work than it saved. */
+        .press:active, .match-card:active { will-change: transform; }
+        @media (min-width: 900px) {
+          .match-card:hover { transform: translateY(-2px); will-change: transform; }
+          .press:hover { filter: brightness(1.08); }
+        }
         * { -webkit-tap-highlight-color: transparent; }
-        button { outline: none; border: 0; -webkit-appearance: none; appearance: none; }
+        button { outline: none; border: 0; -webkit-appearance: none; appearance: none; font-family: inherit; }
         button:focus, button:focus-visible, button:active { outline: none; }
         button::-moz-focus-inner { border: 0; }
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-thumb { background: ${theme.dark ? "rgba(255,255,255,0.12)" : "rgba(18,24,31,0.15)"}; border-radius: 3px; }
         input:focus { border-color: ${theme.dark ? "rgba(255,255,255,0.3)" : "rgba(18,24,31,0.3)"} !important; }
         input::placeholder { color: ${theme.dark ? "rgba(255,255,255,0.25)" : "rgba(18,24,31,0.3)"}; }
-        button { will-change: transform; font-family: inherit; }
+        /* Scroll containers get their own compositing layer up front so the
+           browser doesn't have to promote/demote them mid-scroll, and
+           momentum scrolling stays native on iOS Safari/WebView. */
+        html, body, #root { height: 100%; }
+        body { -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain; }
       `}</style>
 
       {isDesktop && (
@@ -2162,14 +2274,6 @@ export default function App() {
                   </div>
                 </>
               )}
-              {finalMatches.length > 0 && (
-                <>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: theme.textFaint, margin: "24px 0 12px", letterSpacing: "0.02em" }}>RECENT RESULTS</div>
-                  <div style={feedGridStyle}>
-                    {finalMatches.map(m => <MatchCard key={m.id} m={m} onOpen={openMatch} theme={theme} isOwner={isOwnerOf(m)} />)}
-                  </div>
-                </>
-              )}
             </div>
           ) : tab === "explore" ? (
             <div style={{ animation: "fadeIn 0.3s ease" }}>
@@ -2201,6 +2305,7 @@ export default function App() {
           ) : (
             <Profile
               onOpenSettings={() => setShowSettings(true)}
+              onOpenMatches={() => setShowMatchesPanel(true)}
               theme={theme}
               profile={profile}
               ownedCount={ownedMatches.length}
@@ -2210,6 +2315,10 @@ export default function App() {
           )}
         </div>
       </div>
+
+      {showMatchesPanel && (
+        <MatchesPanel matches={ownedMatches} onOpen={(m) => { setShowMatchesPanel(false); openMatch(m); }} onClose={() => setShowMatchesPanel(false)} theme={theme} />
+      )}
 
       {!isDesktop && (
         <LiquidGlassShell theme={theme} style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 50, borderTop: `1px solid ${theme.hairline}`, borderRadius: "22px 22px 0 0", display: "flex", justifyContent: "space-around", padding: "10px 8px calc(10px + env(safe-area-inset-bottom))" }}>
