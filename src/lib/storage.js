@@ -22,8 +22,10 @@ const DEFAULT_SETTINGS = {
 
 // No default bio — the field should read empty until the user sets one.
 const DEFAULT_PROFILE = {
-  name: "Elite",
+  name: "",
+  username: "",
   bio: "",
+  onboardingComplete: false,
 };
 
 export function loadSettings() {
@@ -44,9 +46,9 @@ export function saveSettings(settings) {
   }
 }
 
-export function loadProfile() {
+export function loadProfile(userId) {
   try {
-    const raw = localStorage.getItem(PROFILE_KEY);
+    const raw = localStorage.getItem(userId ? PROFILE_KEY + ":" + userId : PROFILE_KEY);
     if (!raw) return { ...DEFAULT_PROFILE };
     return { ...DEFAULT_PROFILE, ...JSON.parse(raw) };
   } catch {
@@ -54,9 +56,9 @@ export function loadProfile() {
   }
 }
 
-export function saveProfile(profile) {
+export function saveProfile(profile, userId) {
   try {
-    localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+    localStorage.setItem(userId ? PROFILE_KEY + ":" + userId : PROFILE_KEY, JSON.stringify(profile));
   } catch {
     // ignore
   }
@@ -65,9 +67,9 @@ export function saveProfile(profile) {
 // ---------- Matches ----------
 // Persists the full matches array (seed + user-created + live edits) so
 // ongoing scoring survives a refresh/app relaunch.
-export function loadMatches(fallback) {
+export function loadMatches(fallback, userId) {
   try {
-    const raw = localStorage.getItem(MATCHES_KEY);
+    const raw = localStorage.getItem(userId ? MATCHES_KEY + ":" + userId : MATCHES_KEY);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return fallback;
@@ -77,9 +79,9 @@ export function loadMatches(fallback) {
   }
 }
 
-export function saveMatches(matches) {
+export function saveMatches(matches, userId) {
   try {
-    localStorage.setItem(MATCHES_KEY, JSON.stringify(matches));
+    localStorage.setItem(userId ? MATCHES_KEY + ":" + userId : MATCHES_KEY, JSON.stringify(matches));
   } catch {
     // storage full or unavailable — fail silently, in-memory state still works
   }

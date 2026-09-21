@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth";
 import {
   Home, Trophy, PlusCircle, User, Search, ChevronLeft, Lock, Globe,
   Flame, X, Users, Settings, Bell, Shield, Moon, Sun, ChevronRight,
@@ -19,6 +20,7 @@ import {
 import {
   isInstallAvailable, onInstallAvailabilityChange, promptInstall, isRunningStandalone,
 } from "./lib/pwaInstall.js";
+import { auth } from "./lib/firebase.js";
 
 // ============================================================
 // DESIGN TOKENS
@@ -1846,7 +1848,7 @@ function EditProfilePanel({ profile, onSave, onClose, theme }) {
   );
 }
 
-function SettingsPanel({ onBack, theme, settings, setSettings, profile, setProfile }) {
+function SettingsPanel({ onBack, theme, settings, setSettings, profile, setProfile, onSignOut }) {
   const [editingProfile, setEditingProfile] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -1884,7 +1886,7 @@ function SettingsPanel({ onBack, theme, settings, setSettings, profile, setProfi
 
       <SettingsSection title="SUPPORT" theme={theme}>
         <SettingsLinkRow icon={HelpCircle} label="Help center" theme={theme} />
-        <SettingsLinkRow icon={LogOut} label="Log out" danger last theme={theme} />
+        <SettingsLinkRow icon={LogOut} label="Log out" sub="Sign out of Scoreline on this device" danger last theme={theme} onClick={onSignOut} />
       </SettingsSection>
 
       <div style={{ textAlign: "center", fontSize: 11, color: theme.textFaint, marginTop: 20 }}>Scoreline v1.0 · Settings saved to this browser</div>
@@ -2005,10 +2007,10 @@ const NAV = [
 // ============================================================
 // APP
 // ============================================================
-export default function App() {
+function ScorelineApp({ authUser, onSignOut }) {
   const [tab, setTab] = useState("home");
-  const deviceId = useRef(getDeviceId()).current;
-  const [matches, setMatches] = useState(() => loadMatches(buildSeedMatches()));
+  const deviceId = authUser.uid;
+  const [matches, setMatches] = useState(() => loadMatches(buildSeedMatches(), authUser.uid));
   const [activeMatchId, setActiveMatchId] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -2019,10 +2021,10 @@ export default function App() {
   const [isWide, setIsWide] = useState(typeof window !== "undefined" ? window.innerWidth >= 1280 : false);
 
   const [settings, setSettings] = useState(loadSettings);
-  const [profile, setProfile] = useState(loadProfile);
+  const [profile, setProfile] = useState(() => loadProfile(authUser.uid));
   useEffect(() => saveSettings(settings), [settings]);
-  useEffect(() => saveProfile(profile), [profile]);
-  useEffect(() => saveMatches(matches), [matches]);
+  useEffect(() => saveProfile(profile, authUser.uid), [profile, authUser.uid]);
+  useEffect(() => saveMatches(matches, authUser.uid), [matches, authUser.uid]);
 
   const theme = useTheme(settings.darkMode);
 
@@ -2245,7 +2247,7 @@ export default function App() {
 
           {showSettings ? (
             <div style={{ maxWidth: isDesktop ? 640 : "none" }}>
-              <SettingsPanel onBack={() => setShowSettings(false)} theme={theme} settings={settings} setSettings={setSettings} profile={profile} setProfile={setProfile} />
+              <SettingsPanel onBack={() => setShowSettings(false)} theme={theme} settings={settings} setSettings={setSettings} profile={profile} setProfile={setProfile} onSignOut={onSignOut} />
             </div>
           ) : activeMatch ? (
             <div style={{ maxWidth: isWide ? 1000 : "none" }}>
@@ -2343,3 +2345,123 @@ export default function App() {
     </div>
   );
 }
+
+
+// ============================================================
+// AUTHENTICATION + FIRST-LOGIN ONBOARDING
+// ============================================================
+function AuthShell({ children }) {
+  return (
+    <div style={{ minHeight: "100vh", background: "#0A0E12", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: "Inter, system-ui, sans-serif" }}>
+      {children}
+    </div>
+  );
+}
+
+function AuthLoadingScreen() {
+  return (
+    <AuthShell>
+      <div style={{ textAlign: "center", color: "rgba(255,255,255,0.62)" }}>
+        <div style={{ width: 54, height: 54, borderRadius: 17, margin: "0 auto 18px", background: "linear-gradient(135deg, #3DDC97, #4EC5FF)", display: "flex", alignItems: "center", justifyContent: "center" }}><Flame size={28} color="#0A0E12" strokeWidth={2.5} /></div>
+        <div style={{ fontFamily: "Space Grotesk", fontSize: 18, fontWeight: 700 }}>Loading Scoreline…</div>
+      </div>
+    </AuthShell>
+  );
+}
+
+function GoogleLoginScreen({ onLogin, loading, error }) {
+  return (
+    <AuthShell>
+      <div style={{ width: "100%", maxWidth: 430, textAlign: "center" }}>
+        <div style={{ width: 72, height: 72, borderRadius: 24, margin: "0 auto 22px", background: "linear-gradient(135deg, #3DDC97, #4EC5FF)", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 16px 40px -12px rgba(61,220,151,0.45)" }}><Flame size={38} color="#0A0E12" strokeWidth={2.5} /></div>
+        <div style={{ fontFamily: "Space Grotesk", fontSize: 34, fontWeight: 800, letterSpacing: "-0.04em" }}>Scoreline</div>
+        <p style={{ margin: "10px auto 30px", maxWidth: 310, color: "rgba(255,255,255,0.55)", fontSize: 14, lineHeight: 1.6 }}>Track every game, share live scores, and build your sporting identity.</p>
+        <div style={{ background: "linear-gradient(155deg, rgba(255,255,255,0.085), rgba(255,255,255,0.025))", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 24, padding: 24, boxShadow: "0 20px 55px -25px rgba(0,0,0,0.75)" }}>
+          <div style={{ fontFamily: "Space Grotesk", fontSize: 20, fontWeight: 700, marginBottom: 7 }}>Welcome to Scoreline</div>
+          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 12.5, lineHeight: 1.5, marginBottom: 20 }}>Sign in first, then choose the username people will see.</div>
+          <button onClick={onLogin} disabled={loading} style={{ width: "100%", height: 48, borderRadius: 13, border: "1px solid rgba(18,24,31,0.12)", background: "#fff", color: "#182027", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, fontSize: 14, fontWeight: 700, cursor: loading ? "wait" : "pointer", opacity: loading ? 0.7 : 1 }}>
+            <span style={{ fontSize: 19, fontWeight: 800, color: "#4285F4", lineHeight: 1 }}>G</span>{loading ? "Opening Google…" : "Continue with Google"}
+          </button>
+          {error && <div role="alert" style={{ marginTop: 14, color: "#FF8B96", fontSize: 12, lineHeight: 1.5 }}>{error}</div>}
+        </div>
+        <div style={{ marginTop: 20, color: "rgba(255,255,255,0.3)", fontSize: 11 }}>Your Google account is used only to secure your Scoreline identity.</div>
+      </div>
+    </AuthShell>
+  );
+}
+
+function UsernameSetupScreen({ user, onSave, onSignOut }) {
+  const suggested = (user.displayName || "").replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 20).toLowerCase();
+  const [username, setUsername] = useState(suggested);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    const value = username.trim().toLowerCase();
+    if (!/^[a-z0-9._-]{3,20}$/.test(value)) {
+      setError("Use 3–20 characters: letters, numbers, dots, underscores, or hyphens.");
+      return;
+    }
+    setSaving(true);
+    onSave({ username: value, name: value, bio: "", onboardingComplete: true });
+  };
+
+  return (
+    <AuthShell>
+      <div style={{ width: "100%", maxWidth: 430 }}>
+        <div style={{ textAlign: "center", marginBottom: 26 }}>
+          <div style={{ width: 64, height: 64, borderRadius: 22, margin: "0 auto 18px", overflow: "hidden", background: "linear-gradient(135deg, #3DDC97, #4EC5FF)", display: "flex", alignItems: "center", justifyContent: "center", color: "#0A0E12", fontFamily: "Space Grotesk", fontSize: 25, fontWeight: 800 }}>
+            {user.photoURL ? <img src={user.photoURL} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : (user.displayName || user.email || "S")[0].toUpperCase()}
+          </div>
+          <div style={{ fontFamily: "Space Grotesk", fontSize: 28, fontWeight: 800, letterSpacing: "-0.035em" }}>One last step</div>
+          <p style={{ margin: "9px auto 0", color: "rgba(255,255,255,0.55)", fontSize: 14, lineHeight: 1.55 }}>Choose the username other players will see on Scoreline.</p>
+        </div>
+        <form onSubmit={handleSubmit} style={{ background: "linear-gradient(155deg, rgba(255,255,255,0.085), rgba(255,255,255,0.025))", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 24, padding: 24, boxShadow: "0 20px 55px -25px rgba(0,0,0,0.75)" }}>
+          <label htmlFor="scoreline-username" style={{ display: "block", color: "rgba(255,255,255,0.72)", fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Username</label>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, height: 50, padding: "0 14px", borderRadius: 13, border: "1px solid rgba(255,255,255,0.13)", background: "rgba(255,255,255,0.05)" }}>
+            <span style={{ color: "#3DDC97", fontSize: 17, fontWeight: 700 }}>@</span>
+            <input id="scoreline-username" value={username} onChange={event => { setUsername(event.target.value.toLowerCase()); setError(""); }} autoFocus maxLength={20} autoComplete="username" placeholder="your_username" style={{ flex: 1, minWidth: 0, border: "none", outline: "none", background: "transparent", color: "#fff", fontSize: 15, fontFamily: "inherit" }} />
+          </div>
+          {error && <div role="alert" style={{ marginTop: 10, color: "#FF8B96", fontSize: 12, lineHeight: 1.45 }}>{error}</div>}
+          <button type="submit" disabled={saving} style={{ width: "100%", height: 48, marginTop: 18, border: "none", borderRadius: 13, background: "linear-gradient(135deg, #3DDC97, #4EC5FF)", color: "#0A0E12", fontSize: 14, fontWeight: 800, cursor: saving ? "wait" : "pointer", opacity: saving ? 0.7 : 1 }}>{saving ? "Saving…" : "Enter Scoreline"}</button>
+        </form>
+        <button onClick={onSignOut} style={{ display: "block", margin: "18px auto 0", border: "none", background: "transparent", color: "rgba(255,255,255,0.45)", cursor: "pointer", fontSize: 12 }}>Use a different Google account</button>
+      </div>
+    </AuthShell>
+  );
+}
+
+function App() {
+  const [authUser, setAuthUser] = useState(undefined);
+  const [authError, setAuthError] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [userProfile, setUserProfile] = useState(undefined);
+
+  useEffect(() => onAuthStateChanged(auth, user => setAuthUser(user)), []);
+  useEffect(() => { setUserProfile(authUser ? loadProfile(authUser.uid) : undefined); }, [authUser]);
+
+  const handleGoogleLogin = async () => {
+    setAuthError("");
+    setLoginLoading(true);
+    try {
+      await signInWithPopup(auth, new GoogleAuthProvider());
+    } catch (error) {
+      if (error?.code !== "auth/popup-closed-by-user" && error?.code !== "auth/cancelled-popup-request") {
+        setAuthError("Google sign-in could not finish. Check that Google is enabled in Firebase Authentication and try again.");
+      }
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleSignOut = () => signOut(auth);
+  const handleUsernameSave = (profile) => { saveProfile(profile, authUser.uid); setUserProfile(profile); };
+
+  if (authUser === undefined || (authUser && userProfile === undefined)) return <AuthLoadingScreen />;
+  if (!authUser) return <GoogleLoginScreen onLogin={handleGoogleLogin} loading={loginLoading} error={authError} />;
+  if (!userProfile?.onboardingComplete || !userProfile?.username) return <UsernameSetupScreen user={authUser} onSave={handleUsernameSave} onSignOut={handleSignOut} />;
+  return <ScorelineApp authUser={authUser} onSignOut={handleSignOut} />;
+}
+
+export default App;
