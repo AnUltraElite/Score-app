@@ -21,6 +21,7 @@ import {
   isInstallAvailable, onInstallAvailabilityChange, promptInstall, isRunningStandalone,
 } from "./lib/pwaInstall.js";
 import { auth } from "./lib/firebase.js";
+import { loadCloudMatches, loadCloudProfile, saveCloudMatch, saveCloudProfile } from "./lib/firestore.js";
 
 // ============================================================
 // DESIGN TOKENS
@@ -2011,6 +2012,7 @@ function ScorelineApp({ authUser, onSignOut }) {
   const [tab, setTab] = useState("home");
   const deviceId = authUser.uid;
   const [matches, setMatches] = useState(() => loadMatches(buildSeedMatches(), authUser.uid));
+  const [cloudMatchesReady, setCloudMatchesReady] = useState(false);
   const [activeMatchId, setActiveMatchId] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -2023,8 +2025,31 @@ function ScorelineApp({ authUser, onSignOut }) {
   const [settings, setSettings] = useState(loadSettings);
   const [profile, setProfile] = useState(() => loadProfile(authUser.uid));
   useEffect(() => saveSettings(settings), [settings]);
-  useEffect(() => saveProfile(profile, authUser.uid), [profile, authUser.uid]);
-  useEffect(() => saveMatches(matches, authUser.uid), [matches, authUser.uid]);
+  useEffect(() => {
+    saveProfile(profile, authUser.uid);
+    if (profile?.onboardingComplete && profile?.username) saveCloudProfile(authUser.uid, profile).catch(() => {});
+  }, [profile, authUser.uid]);
+  useEffect(() => {
+    saveMatches(matches, authUser.uid);
+    if (!cloudMatchesReady) return;
+    Promise.all(matches.filter(match => match.ownerId === authUser.uid).map(match => saveCloudMatch(authUser.uid, match))).catch(() => {});
+  }, [matches, authUser.uid, cloudMatchesReady]);
+
+  useEffect(() => {
+    let active = true;
+    loadCloudMatches(authUser.uid).then(remoteMatches => {
+      if (!active) return;
+      if (remoteMatches.length > 0) {
+        setMatches(current => {
+          const byId = new Map(current.map(match => [match.id, match]));
+          remoteMatches.forEach(match => byId.set(match.id, match));
+          return Array.from(byId.values());
+        });
+      }
+      setCloudMatchesReady(true);
+    }).catch(() => { if (active) setCloudMatchesReady(true); });
+    return () => { active = false; };
+  }, [authUser.uid]);
 
   const theme = useTheme(settings.darkMode);
 
@@ -2396,7 +2421,7 @@ function UsernameSetupScreen({ user, onSave, onSignOut }) {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
     const value = username.trim().toLowerCase();
     if (!/^[a-z0-9._-]{3,20}$/.test(value)) {
@@ -2404,7 +2429,12 @@ function UsernameSetupScreen({ user, onSave, onSignOut }) {
       return;
     }
     setSaving(true);
-    onSave({ username: value, name: value, bio: "", onboardingComplete: true });
+    try {
+      await onSave({ username: value, name: value, bio: "", onboardingComplete: true });
+    } catch (error) {
+      setSaving(false);
+      setError(error?.code === "username-taken" ? "That username is already taken. Try another one." : "Could not save your username. Please try again.");
+    }
   };
 
   return (
@@ -2439,7 +2469,15 @@ function App() {
   const [userProfile, setUserProfile] = useState(undefined);
 
   useEffect(() => onAuthStateChanged(auth, user => setAuthUser(user)), []);
-  useEffect(() => { setUserProfile(authUser ? loadProfile(authUser.uid) : undefined); }, [authUser]);
+  useEffect(() => {
+    let active = true;
+    if (!authUser) { setUserProfile(undefined); return () => {}; }
+    setUserProfile(undefined);
+    loadCloudProfile(authUser.uid).then(cloudProfile => {
+      if (active) setUserProfile(cloudProfile || loadProfile(authUser.uid));
+    }).catch(() => { if (active) setUserProfile(loadProfile(authUser.uid)); });
+    return () => { active = false; };
+  }, [authUser]);
 
   const handleGoogleLogin = async () => {
     setAuthError("");
@@ -2456,7 +2494,7 @@ function App() {
   };
 
   const handleSignOut = () => signOut(auth);
-  const handleUsernameSave = (profile) => { saveProfile(profile, authUser.uid); setUserProfile(profile); };
+  const handleUsernameSave = async (profile) => { await saveCloudProfile(authUser.uid, profile); saveProfile(profile, authUser.uid); setUserProfile(profile); };
 
   if (authUser === undefined || (authUser && userProfile === undefined)) return <AuthLoadingScreen />;
   if (!authUser) return <GoogleLoginScreen onLogin={handleGoogleLogin} loading={loginLoading} error={authError} />;
